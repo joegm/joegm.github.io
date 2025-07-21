@@ -1,36 +1,39 @@
 <!DOCTYPE html>
 <html>
   <head id="head">
-    <meta charset="utf-8">
-    <meta name="viewport" content="initial-scale=1">
-    <title :text="$site.title"></title>
+    <meta charset="UTF-8">
+    <title><ctx :text="$site.title"></ctx>
+      -
+      <ctx :text="$page.title"></ctx></title>
     <link type="text/css" rel="stylesheet" href="$site.asset('style.css').link()">
     <link type="text/css" rel="stylesheet" href="$site.asset('highlight.css').link()">
-    <!-- mathtex -->
-    <link type="text/css" rel="stylesheet" href="$site.asset('Temml-Local.css').link()">
-    <script defer src="$site.asset('temml.min.js').link()"></script>
-    <script defer src="$site.asset('render-mathtex.js').link()"></script>
-    <!-- /mathtex -->
     <super>
   </head>
-  <body id="body">
-    <h1 class="site-title" :text="$site.title"></h1>
-    <nav>
-      <a href="$site.page('').link()">Home</a>
-       &nbsp; • &nbsp;
-      <a href="$site.page('about').link()">About</a>
-       &nbsp; • &nbsp;
-      <a href="$site.page('blog').link()">Blog</a>
-      <ctx :if="$site.page('devlog').subpages().first?()">
-         &nbsp; • &nbsp;
-        <a href="$if.link()">Devlog</a>
-      </ctx>
-    </nav>
-    <super>
-    <footer>
-      <hr>
-      <h5>SITE UNDER CONSTRUCTION</h5>
-      <img src="$site.asset('under-construction.gif').link()" width=90>
-    </footer>
+  <body>
+    <div class="left-column">
+      <div class="sticky-content">
+        <a class="site-title" href="$site.link()" :text="$site.title"></a>
+        <ul class="nav">
+          <ctx :loop="$site.pages('', 'blog')">
+            <div :if="$loop.it.isCurrent()">
+              <li class="current-page"><a href="$loop.it.link()" :text="$loop.it.title"></a></li>
+            </div>
+            <div :if="$loop.it.isCurrent().not()">
+              <li><a href="$loop.it.link()" :text="$loop.it.title"></a></li>
+            </div>
+          </ctx>
+          <ctx :if="$page.nextPage?()">
+            <li><a href="$if.link()">Next Post -
+                <ctx :text="$if.title"></ctx></a></li>
+          </ctx>
+          <!-- TODO: prev page -->
+        </ul>
+      </div>
+    </div>
+    <div id="content" class="middle-column">
+      <h1 :text="$page.title"></h1>
+      <super>
+    </div>
+    <div class="right-column"></div>
   </body>
 </html>

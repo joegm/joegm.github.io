@@ -1,25 +1,12 @@
 <extend template="base.shtml">
-<head id="head">
-  <style>
-    .date {
-      font-size: 0.9em;
-    }
-    
-    .title h3{
-      margin-top: 0;
-    }
-  </style>
-</head>
-<body id="body">
-  <h1 :text="$page.title"></h1>
+<head id="head"></head>
+<div id="content">
   <div :html="$page.content()"></div>
-  <div>
-    <h2>Post list</h2>
-    <div :loop="$page.subpages()">
-      <span class="date" :text="$loop.it.date.format('January 02, 2006')"></span>
-      <a class="title" href="$loop.it.link()">
-        <h3 :text="$loop.it.title"></h3>
-      </a>
-    </div>
+  <div :loop="$page.subpages()">
+    <a class="blog-listing" href="$loop.it.link()">
+      <h2 :text="$loop.it.title"></h2>
+      <p class="description" :text="$loop.it.description"></p>
+      <p class="date" :text="$loop.it.date.format('January 02, 2006')"></p>
+    </a>
   </div>
-</body>
+</div>
