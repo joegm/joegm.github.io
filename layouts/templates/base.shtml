@@ -22,11 +22,17 @@
               <li><a href="$loop.it.link()" :text="$loop.it.title"></a></li>
             </div>
           </ctx>
-          <ctx :if="$page.nextPage?()">
-            <li><a href="$if.link()">Next Post -
-                <ctx :text="$if.title"></ctx></a></li>
+          <ctx :if="$page.layout.eql('post.shtml')">
+            <ctx :if="$page.nextPage?()">
+              <li><a href="$if.link()">Next Post -
+                  <ctx :text="$if.title"></ctx></a></li>
+            </ctx>
+            <li class="current-page"><a href="$page.link()" :text="$page.title"></a></li>
+            <ctx :if="$page.prevPage?()">
+              <li><a href="$if.link()">Prev Post -
+                  <ctx :text="$if.title"></ctx></a></li>
+            </ctx>
           </ctx>
-          <!-- TODO: prev page -->
         </ul>
       </div>
     </div>
