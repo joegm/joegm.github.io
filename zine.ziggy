@@ -5,6 +5,11 @@ Site {
     .layouts_dir_path = "layouts",
     .assets_dir_path = "assets",
     .static_assets = [
-        "ZedMonoNerdFont-Regular.woff2",
+        "IosevkaNerdFontMono-Regular.woff2",
+        "IosevkaNerdFontMono-Bold.woff2",
+        "IosevkaNerdFontMono-Italic.woff2",
+        "Iosevka-Aile.woff2",
+        "Iosevka-Aile-Italic.woff2",
+        "Iosevka-Etoile.woff2",
     ],
 }

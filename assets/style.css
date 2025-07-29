@@ -1,7 +1,5 @@
 :root {
   --fg0: #e4e4ef;
-  --fg1: #f4f4ff;
-  --fg2: #f5f5f5;
   --fg3: #a89984;
   --bg0: #181818;
   --bg1: #282828;
@@ -12,32 +10,59 @@
   --bg7: #3f3f3f;
   --bg8: #2c2c2c;
   --red0: #f43841;
-  --red1: #ff4f58;
-  --red2: #2B0A0B;
   --red3: #fb4934;
   --green0: #73c936;
   --green1: #b8bb26;
-  --yellow0: #ffdd33;
-  --yellow1: #655814;
+  --yellow: #ffdd33;
   --blue0: #5292c8;
   --orange0: #d65d0e;
   --orange1: #fe8019;
-  --brown0: #cc8c3c;
+  --brown: #cc8c3c;
   --quartz: #95a99f;
-  --niagara0: #96a6c8;
-  --niagara1: #303540;
+  --niagara: #96a6c8;
   --wisteria: #9e95c7;
   --aqua1: #8ec07c;
 }
 
 @font-face {
-  font-family: 'Zed Mono';
-  src: url('ZedMonoNerdFont-Regular.woff2') format('woff2');
+  font-family: 'Iosevka Mono';
+  src: url('IosevkaNerdFontMono-Regular.woff2') format('woff2');
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Iosevka Mono';
+  src: url('IosevkaNerdFontMono-Italic.woff2') format('woff2');
+  font-style: italic;
+}
+
+@font-face {
+  font-family: 'Iosevka Mono';
+  src: url('IosevkaNerdFontMono-Bold.woff2') format('woff2');
+  font-weight: bold;
+}
+
+@font-face {
+  font-family: 'Iosevka Aile';
+  src: url('Iosevka-Aile.woff2') format('woff2');
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Iosevka Aile';
+  src: url('Iosevka-Aile-Italic.woff2') format('woff2');
+  font-style: italic;
+}
+
+@font-face {
+  font-family: 'Iosevka Etoile';
+  src: url("Iosevka-Etoile.woff2") format('woff2');
   font-style: normal;
 }
 
 html {
   color: var(--fg0);
+  font-family: "Iosevka Aile";
 }
 
 body {
@@ -67,13 +92,6 @@ body {
   overflow-y: auto;
 }
 
-.site-title {
-  padding: 20px;
-  font-size: 4em;
-  color: var(--niagara0);
-  font-weight: bold;
-}
-
 .nav {
   list-style-type: none;
   padding: 0;
@@ -94,36 +112,15 @@ body {
 
 .nav .current-page a {
   color: var(--bg1);
-  background-color: var(--yellow0);
+  background-color: var(--yellow);
 }
 
-
-pre {
-  background-color: var(--bg0);
-  overflow-x: auto;
-}
-
-h1,
-h1 a,
-h2 a,
-h3 a,
-h4 a,
-h5 a,
-h6 a {
-  color: var(--brown0);
-  text-decoration: none;
-}
-
-a {
-  color: var(--green1);
-}
-
-a :visited {
-  color: var(--green0)
-}
-
-code {
-  font-family: "Zed Mono", mono;
+.site-title {
+  padding: 20px;
+  font-size: 3em;
+  color: var(--yellow);
+  font-family: "Iosevka Etoile";
+  font-weight: bold;
 }
 
 .blog-listing {
@@ -133,10 +130,51 @@ code {
   border-top: 2px solid var(--fg3);
 }
 
-a.blog-listing:hover {
+.blog-listing:hover {
   background-color: var(--bg2);
 }
 
-a.blog-listing p.description {
+.blog-listing p.description {
   color: var(--fg0);
+}
+
+h1,
+h2,
+h2 a,
+h3 a,
+h4 a,
+h5 a,
+h6 a {
+  color: var(--yellow);
+  text-decoration: none;
+  font-family: "Iosevka Etoile";
+  font-weight: bold;
+}
+
+
+
+a {
+  color: var(--green1);
+}
+
+a :visited {
+  color: var(--green0)
+}
+
+pre {
+  background-color: var(--bg0);
+  overflow-x: auto;
+  border-top: 2px solid var(--fg3);
+  border-bottom: 2px solid var(--fg3);
+  padding: 10px 5px;
+}
+
+code {
+  font-family: "Iosevka Mono", mono;
+}
+
+
+figcaption {
+  color: var(--brown);
+  font-style: italic;
 }
