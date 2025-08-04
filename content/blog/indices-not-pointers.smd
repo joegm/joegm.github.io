@@ -1,10 +1,9 @@
 ---
 .title = "Indices, not Pointers",
-.description = "A data-oriented performance technique",
+.description = "A data-oriented performance technique.",
+.layout = "post.shtml",
 .date = @date("2025-07-15"),
 .author = "Joe Mckay",
-.layout = "post.shtml",
-.draft = false,
 ---
 
 There is a pattern I've learned while using Zig which I've never seen used in any other language. It's an extremely simple trick which - when applied to a data structure - reduces memory usage, reduces memory allocations, speeds up accesses, makes freeing instantaneous, and generally makes everything much, much faster. The trick is to use indices, not pointers.

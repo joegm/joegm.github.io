@@ -1,0 +1,78 @@
+---
+.title = "Branch Prediction Demystified",
+.description = "A brief explanation of a magical-sounding cpu optimization.",
+.layout = "post.shtml",
+.author = "Joe Mckay",
+.date = @date("2025-08-04"),
+---
+
+While exploring low-level programming, I've occasionaly encountered a mysterious term in the context of performance: *branch prediction*. Based on context, I managed to piece together that this is when a cpu predicts whether or not a conditional branch is taken, and starts executing code from wherever it predicted execution would flow before it knew for certain whether it was right. Of course, this leaves a lot of room for questions like:
+
+1. Why would the cpu need to *predict* which way a branch should go when it can just evaluating the condition?
+2. What kind of magic would be invoked to predict which way a branch would go with any reliability?
+3. How can the cpu start executing instructions when it might be on the wrong execution path?
+
+## [What is a Branch Anyway?]($section.id('what-is-a-branch-anyway'))
+
+A conditional branch (or just "branch" as I'll refer to it) is a type of machine instruction which will cause the cpu to start executing from a different part of the program, depending on a certain condition (e.g, if the result of the last operation was 0). If the condition is not met, then the branch is not taken and execution continues with the next instruction after the branch. This kind of instruction is what makes non-linear flow control like `if` statements and loops possible.
+
+## [The Reason]($section.id('the-reason'))
+
+The answer to the first question is the simplest: performance. Evaluating a branch condition and determining the destination address can both be time-consuming tasks (from a cpu's perspective anyway), so rather than idly wait to find out whether to take the branch or not, the cpu can make a guess as to which way the branch will go and start fetching, decoding, and executing instructions from there. If it's right, it can continue executing and will have saved precious clock cycles.
+
+## [The CPU Pipeline]($section.id('the-cpu-pipeline'))
+
+Before I attempt to answer the other 2 questions, I'll first give a brief overview of the stages involved in executing instruction. Every cpu varies slightly, but each instruction generally involves at least 4 main steps of execution:
+
+1. *Fetch*: transfer the instruction into the cpu's instruction register from cache or memory.
+2. *Decode*: translate the instruction into the cpus native format, which often involves decomposing it into several micro-operations.
+3. *Execution*: carry out the given instruction.
+4. *Writeback*: write the result of the instruction back to a register (if applicable).
+
+Branch prediction occurs at the decode stage, where the branch instruction is sent of to the cpu's *branch unit*, which is responsible for predicting and executing branches.
+
+[A diagram of a CPU instruction pipeline](<$image.asset('CPU-Pipeline.svg').size(0, 400)>)
+
+Modern cpus also employ *pipelined execution*, which basically means having multiple instructions being processed simultaneously at different stages in the pipeline - i.e the next instructions is fetched while the previous one is being decoded, etc. This is important for answering the third question.
+
+[Instructions (circles) moving through the pipeline over time](<$image.asset('Pipelined-Execution.svg').size(0, 400)>)
+
+Without branch prediction, branch instructions would be stuck at the decode phase while the condition and target instruction address are being calculated and instructions ahead of it move onwards. This introduces empty stages called "bubbles" into the pipeline, which is bad for efficiency and performance.
+
+## [Common Techniques]($section.id('common-techniques'))
+
+As for *how* a branch predictor works, the techniques used fall into two categories: *static*, and *dynamic*. Static branch prediction is a method which relies on general assumptions about branches and does not require any runtime information, whereas a dynamic prediction uses data stored about branches which have already occured in the program.
+
+The most prominent example of static branch prediction is to predict that backward branches are always taken. A backwards branch is a branch whose destination is before the branch instruction in the program, and this technique relies on the assumption that most backwards branches are used in the context of loops, where there will be a conditional branch back to the beginning of the loop. Since loops can repeat an unbounded amount of times and only exit once, it makes sense to predict that the backwards branch will be taken as that corresponds to execution jumping back to the beginning of the loop to begin another iteration.
+
+```asm
+0x45 .loop_start:    <---------------+
+     ...                             |
+     ... ' <loop body>               |
+     ...                             |
+0x80  conditional_jump .loop_start --+
+```
+
+```=html
+<figcaption>Pseudo-assembly code of a conditional loop structure</figcaption>
+```
+
+Dynamic branch prediction is a bit more sophisticated, and essentially relies on storing information about previous branches which have been encountered in the running program. This mainly involves storing two kinds of structures on the cpu. The first is called a *branch history table* (BHT), which consists of an entry per previously encountered branch which stores a few bits to represent the likelihood the branch will be taken based on its history. The second is a *branch target buffer* (BTB), which stores the target/destination addresses of previously executed branches. As is common with caches, a bigger BHT or BTB generally leads to better performance as more branches can be tracked meaning branch prediction is likely to succeed more often.
+
+[The BHT and BTB structures](<$image.asset('Branch-Prediction-Structures.svg').size(800, 0)>)
+
+## [What if It's Wrong?]($section.id('what-if-its-wrong'))
+
+But what happens if the branch predictor gets it wrong and the cpu has already started speculatively executing the wrong instructions? First, recall that the cpu executes instructions in a *pipeline*, where the results of instructions are only written back to registers at the final stage. It's not a problem if the wrong instructions are fetched, decoded and executed, as long as they don't write their results then they have no real effect.
+
+This means that the cpu can start fetching instructions to keep the pipeline full and then simply pause executions before the first instructions from the prediction enters the writeback stage. If it turns out it made the wrong prediction, the pipeline must be cleared (or "flushed") before the cpu can start fetching instructions from the correct location.
+
+Flushing the pipeline has a surprisingly negative impact on cpu performance, so it's critical that the branch predictor is accurate to justify the risk of a misprediction.
+
+## [The Takeaway]($section.id('the-takeaway'))
+
+Hopefully it goes without saying that I've barely scratched the surface and broadly oversimplified the complexity of engineering that goes into a modern branch predictor (as in pretty much any part of computer hardware), but having an idea of how a branch predictor works and why they're needed in the first place is helpful in understanding why code which branches less often and more predictably usually performs much better.
+
+## [Further Reading]($section.id('further-reading'))
+
+Most of the information here comes from reading *Inside the Machine* by Jon Stokes, a great book about cpu architecture. Assume all mistakes are mine.
