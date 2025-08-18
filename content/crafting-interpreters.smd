@@ -1,0 +1,843 @@
+---
+.title = "Crafting an Interpreter in Zig",
+.date = @date("2025-08-17"),
+.author = "Joe Mckay",
+.layout = "post.shtml",
+.draft = false,
+---
+
+## Warning - Under Construction!
+
+This page is a work-in-progress and is only available to gather feedback. It will probably be
+re-written in a newer Zig version before being properly released.
+
+## Introduction
+
+[*Crafting Interpreters*](https://craftinginterpreters.com) by Robert Nystrom is a wonderful ([free
+to read!](https://craftinginterpreters.com/contents.html)) book which explains and walks you through
+writing a complete programming language interpreter. It goes through the major steps of going from
+source code to lexing tokens, parsing into an abstract syntax tree (or bytecode) and building up the
+runtime environment for a running program.
+
+In the [second part](https://craftinginterpreters.com/a-bytecode-virtual-machine.html) of this book,
+you rewrite this interpreter in C and learn about compiling source code to lower-level bytecode
+which is then run on a custom built *virtual machine*. In this series I will supplement
+this part of the book by giving a tutorial on writing the same interpreter in
+[Zig](https://ziglang.org/).
+
+### What's A Zig?
+
+[Zig](https://ziglang.org/) is a language similar to C, it's relatively low level and requires the
+programmer to manually manage memory. It is also a lot more modern than C, and has many distinctive
+features which make it much more approachable and ergonomic. I'll use this series to
+teach you how to use Zig well, focusing on how it addresses the challenges of low-level programming
+compared to C.
+
+My hope is that if you read this along with *Crafting Interpreters*, you'll learn the
+techniques used to create an interpreter along with an exciting new programming language.
+
+### How to Read
+
+This series is only a **supplement** to *Crafting Interpreters*. I will not be explaining
+the interpreter-related concepts to the same depth, and you'll have to refer back to the book for
+well-illustrated explanations of interpreter tech. You'll come here to learn how to implement those
+concepts in Zig, and how it differs from the original C code.
+
+### Prerequisites
+
+I'll assume you know how to code, but are new to programming with a non memory-managed language like
+C or Zig. You should at least know what a pointer is.
+
+I strongly recommend reading at least the [Welcome](https://craftinginterpreters.com/welcome.html)
+section of the book to give yourself an idea of what you're getting into, and the toy scripting
+language we're going to be implementing called *Lox*.
+
+If you want to be extra prepared, you can start by doing the
+[first half](https://craftinginterpreters.com/a-tree-walk-interpreter.html) of the book, which
+implements a simpler interpreter in Java and will give you a good idea of the overall process
+of interpreting. If you're brave you can skip that bit and refer back to parts of it if and when
+needed.
+
+## Setting Up
+
+### Download Zig
+
+First you're going to need to get Zig. Zig has not yet reached a stable release yet, so it's
+important you get the right version to follow along. Follow
+[this guide](https://ziglang.org/learn/getting-started/) to install zig version **0.14.1** (TODO) on
+your system. Once your done, run `zig version` to make sure you got the right one working.
+
+### `zig init`
+
+To start a new project, first create an empty directory for it, I've called mine "zlox". Then, in
+the command line, `cd` into that directory and run `zig init` This command initializes a dummy zig
+project which I encourage you to explore. Let's pick it apart.
+
+```sh
+mkdir zlox
+cd zlox/
+zig init
+```
+
+### `build.zig`
+
+Zig comes with it's own *build system*, a tool which makes it more convenient to build programs  by
+automating tasks like fetching dependencies, compiling and testing. Many build systems exist for C
+such as Make, Cmake or Ninja. Zig just has one, and you use it by writing a script *in Zig* called
+`build.zig` which tells it how your program is built.
+
+All this script does is construct a graph structure which describes the dependencies between
+different build *steps*. For example, the step to run your program will depend on the step to
+compile it.
+
+`zig init` has created an example `build.zig` with plenty of comments to help you understand how
+it works. Feel free to read this if your interested, but our build process is going to be pretty
+simple for now. This is the `build.zig` we're going to use.
+
+```zig
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    // Allow the user to specify the target platform and optimization level.
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    // We will create a module for our entry point, 'main.zig'.
+    const exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // This creates a step to compile our module into an executable.
+    const exe = b.addExecutable(.{
+        .name = "zlox",
+        .root_module = exe_mod,
+    });
+
+    // Make sure to compile the executable when running `zig build`
+    b.installArtifact(exe);
+
+    // Create a step to run the compiled program.
+    const run_cmd = b.addRunArtifact(exe);
+
+    // Add a dependency from running the program to compiling it.
+    run_cmd.step.dependOn(b.getInstallStep());
+
+    // Pass through arguments recieved by the build command,
+    // like this: `zig build run -- arg1 arg2 etc`
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+
+    // Provide the run step to the user: `zig build run`.
+    const run_step = b.step("run", "Run the app");
+    run_step.dependOn(&run_cmd.step);
+}
+```
+
+Don't worry, I'll cover the details of the zig syntax when we start writing the proper code. All you
+need to understand for now is that we're creating a *module* for our program, making that module be
+compiled into an executable when `zig build` is run, and also creating a `zig build run` command to
+run our program more conveniently.
+
+When you get more comfortable with the build system, you may want to separate your program into
+multiple modules or add unit tests, but for now you can put it out of your mind as we won't be
+touching it again for a while.
+
+### `build.zig.zon`
+
+You'll also notice a `build.zig.zon` file, which you can completely ignore (and even delete) as
+it's only needed if your using external libraries or creating your own, and we won't be.
+
+### `src/`
+
+All your Zig source code will go in the `src/` directory. You'll notice two files are already there.
+
+1. `main.zig`: contains the entry point of your program as referenced by `build.zig`.
+2. `root.zig`: the root of your library, if you're creating a library. You can delete this file.
+
+Feel free to inspect `main.zig` to see a small example program. You can also delete its contents as
+we're now going to start from scratch.
+
+All you'll need to continue is the above `build.zig` and an empty `src/main.zig`
+
+## Chunks Of Bytecode
+
+In the first chapter, We'll start by defining the structure of our bytecode, which are the basic
+instructions we'll compile source code into and then feed to the virtual machine to execute.
+
+Before continuing, read the start of
+[Chunks of Bytecode](https://craftinginterpreters.com/chunks-of-bytecode.html), and keep the book
+handy so you understand what we're writing.
+
+### Getting Started
+
+Now it's time to write some Zig! Be warned that progress will be slow in this first section as I
+take my time explaining key Zig features and syntax. Once that's out of the way, you'll be
+comfortable writing Zig and we can speed things up.
+
+Let's first inspect a "hello, world!" program:
+
+```zig
+const std = @import("std");
+
+pub fn main() !void {
+    std.debug.print("Hello, {s}!\n", .{"Interpreters"});
+}
+```
+
+First we import the standard library. Zig's standard library is much fuller than C's and includes
+common utilities like a logging interface, dynamic arrays and much more. Zig's imports are also
+namespaced, which means we can access the standard library through `std.` whereas C only has one
+global namespace.
+
+The function signature also carries some important information. First, functions must be marked
+`pub` for public if they are used outside the same file. The return type `!void` can be read as "any
+error or `void`". The exclamation mark (`!`) is used to denote that an error may be returned. We'll
+learn about Zig's interesting error system soon.
+
+Inside `main`, we call `std.debug.print`, which prints formatted text a la `printf` to the standard
+error stream. The "{s}" is a placeholder for a string value which is provided in the second
+argument.
+
+Use `zig build run` to make sure everything's correct:
+
+```
+ zig build run
+Hello, Interpreters!
+```
+
+We won't be needing an equivalent to `common.h`. Zig's standard library has everything we'll need.
+
+### Chunks of Instructions
+
+The first thing to do is write the structure to store our bytecode, called a "chunk". We need 3
+basic functions:
+
+1. Initialize an empty chunkS.
+2. Add a bytecode instruction.
+3. Free the chunk's memory after use.
+
+This is a perfect use case for a dynamic/growable array. I recommend reading through
+[this
+part](https://craftinginterpreters.com/chunks-of-bytecode.html#a-dynamic-array-of-instructions)
+of the book to see how a dynamic array is implemented as it's very much worth understanding
+how this structure works. Thankfully, we're spared from writing it ourselves as Zig's standard
+library has done the work for us in the form of `std.ArrayList` and its relatives.
+
+Let's wrap an arraylist inside a Zig `struct` to store our bytecode.
+
+```zig
+// Add after main():
+
+const Chunk = struct {
+    code: std.ArrayListUnmanaged(u8),
+
+    pub const OpCode = enum(u8) {
+        @"return",
+    };
+};
+```
+
+Zig type declarations take the same form as imports with `const Name = type;` Our struct has one
+field: `code` of type `std.ArrayListUnmanaged(u8).` `ArrayListUnmanaged` is a *generic* type,
+meaning you can specify the type of the elements it stores. We're using `u8` (an unsigned 8-bit
+integer, aka a byte) as the element type rather than `OpCode` because as we'll see soon, the code
+stream can contain bytes other than opcodes.
+
+`OpCode` has been declared *inside* `Chunk`, meaning it will be referred to as `Chunk.OpCode`. For
+now we have just one instruction: `return`. Because `return` is a reserved keyword in Zig, we need
+to use the `@""` syntax so Zig reads it as an identifier.
+
+For initializing a chunk, we'll use a constant value rather than a function. We'll call this value
+`empty` for an empty chunk.
+
+```zig
+    // add inside Chunk after OpCode:
+
+    pub const empty = Chunk{
+        .code = .empty,
+    };
+   
+```
+
+`ArrayListUnmanaged` uses the same pattern to initialize an empty arraylist, so we can use the
+`.empty` value (shorthand for `ArrayListUmanaged.empty`) as the starting value for an empty chunk.
+
+Adding instructions and freeing the chunk both involve memory management, so it's time to cover one
+of Zig's more prominent features.
+
+#### The Allocator Interface
+
+In C, managing memory is quite straightforward. You are given `malloc()` to obtain a block of memory
+and `free()` to give it back once you're done with it. How `malloc()` and `free()` actually obtain and
+manage these blocks is not our concern. This is very straightforward, but presents 2 problems:
+
+1. The user has no choice over the memory management strategy which `malloc` and `free` use. Some
+   use cases may benefit from a specialized allocation strategy, but code which uses `malloc`/`free`
+   provide no control over this.
+
+2. Memory allocations are hidden, meaning libraries can allocate memory with no indication to the
+   caller and often fail to properly handling allocation failure or allow the caller to handle
+   it themselves.
+
+Zig addresses these problems with the `Allocator` interface. This is basically a struct with a set
+of function pointers for allocating and freeing memory. This object must be passed to any function
+which performs memory allocation so that the caller can choose which allocation functions the
+function will use.
+
+Functions which allocate always may fail, and these errors can be propagated to the caller or
+handled within the function somehow.
+
+You'll be seeing a lot of `Allocator` from here on out, so it's important to understand why it's
+there and what it's used for.
+
+Let's add an alias to `Allocator` for our convenience.
+
+```zig
+const std = @import("std");
+const Allocator = std.mem.Allocator; // add this line
+```
+
+With that out of the way, let's create a function to append a byte of code to the chunk.
+
+```zig
+    // add *inside* Chunk after `empty`:
+
+    pub fn append(chunk: *Chunk, gpa: Allocator, byte: u8) Allocator.Error!void {
+        try chunk.code.append(gpa, byte);
+    }
+```
+
+This is a *member function* declared *inside* the struct `Chunk`. It takes a pointer to a `Chunk` as
+the first parameter and Zig allows member functions with this signature to be called like a method:
+e.g `chunk.deinit(gpa);`, where `chunk` is an existing `Chunk` instance which is passed as a pointer
+in the first argument.
+
+For now it's just a wrapper around `ArrayListUnmanaged`'s own `append` function, but we'll add a
+little more functionality at the end of this chapter.
+
+It also takes the `Allocator` parameter by the name of `gpa` which stands for "General Purpose
+Allocator". This is shorter than "allocator" and also distinguishes it from an *arena allocator*,
+which is used differently.
+
+`ArrayListUnmanaged` also has a `.deinit()` function for freeing the contents, but since the chunk
+will be storing other data apart from the bytecode, it makes sense to write our own member function
+to free an entire `Chunk`.
+
+```zig
+    // Add inside Chunk after `empty`:
+
+    // `deinit` is the commonly used name for a freeing function.
+    pub fn deinit(chunk: *Chunk, gpa: Allocator) void {
+        chunk.code.deinit(gpa);
+    }
+```
+
+You may have noticed the `Allocator.Error` in the function signature for the `append`, along with
+the `try` keyword when calling the append function. This would be a good time to talk about how
+Zig handles errors.
+
+#### Errors, Try and Catch
+
+Errors in Zig are defined in types called *error sets* which are similar to enums. The
+`Allocator.Error` error set contains just one error and looks like this:
+
+```zig
+// (in std.mem.Allocator)
+pub const Error = error {
+    OutOfMemory,
+};
+```
+
+Types which look like `Error!SomethingElse` are called *error unions*, and either contain an error
+value in the `Error` set, or a payload value of type `SomethingElse`.
+
+Functions which return an error union can use the `try` keyword to unwrap the value of an error
+union or return it's error in case of failure. A more flexible way to handle errors is using `catch`
+which allows you to provide an alternative expression which will be evaluated if an error union
+contains an error.
+
+```zig
+    // Returns in case of an error.
+    const unwrapped_value = try mayFail(); 
+
+    // Use a default value in case of an error.
+    const unwrapped_value = mayFail() catch default_value; 
+
+    // `catch` can capture the value of the error to handle different error cases.
+    mayFail() catch |err| switch (err) { 
+        error.Foo => return err,
+        else => @panic("TODO: handle all the errors!"),
+    }
+```
+
+While the keywords may look familiar, understand that this is not the same as `try/catch` in
+languages with exceptions. Zig does not have exceptions and errors are ordinary values.
+
+There's a bit more to Zig's errors than that but this is enough to work with for now. You can always
+refer to [the docs](https://ziglang.org/documentation/0.14.1/#Errors) for more detail.
+
+### Disassembling Chunks
+
+Let's finally put our new type to use in `main`!
+
+```zig
+pub fn main() !void {
+    var debug_allocator = std.heap.DebugAllocator(.{}).init;
+    defer _ = debug_allocator.deinit(); // check for memory leaks
+
+    const gpa = debug_allocator.allocator();
+
+    var chunk = Chunk.empty;
+
+    try chunk.append(gpa, @intFromEnum(Chunk.Opcode.@"return"));
+
+    // Try removing this line and running the program. Does Zig catch the leak?
+    chunk.deinit(gpa);
+}
+```
+
+Since we need an `Allocator` to allocate the array, we need to pick a concrete implementation to
+use. I've chosen the standard library's `DebugAllocator`, which can detect and report memory leaks
+in case we forget to free things (`defer` runs the check before `main` exits). The `.allocator();`
+member function returns the `Allocator` interface object which we can then pass to our functions.
+
+If we try `zig build run` now, the code may run but nothing much appears to happen. Now we want to
+be able to display the bytecode in a chunk somehow. This means writing the bytecode *disassembler*,
+which will print the code in a human-readable format. Let's write a dissasembler function to pass
+our test chunk into.
+
+```zig
+// add after `Chunk`
+
+fn disassembleChunk(chunk: *const Chunk, name: []const u8, writer: AnyWriter) AnyWriter.Error!void {
+    try writer.print("== {s} ==", .{name});
+
+    var offset: usize = 0;
+
+    while (offset < chunk.code.items.len) {
+        offset = disassembleInstruction(chunk, offset);
+    }
+}
+```
+
+This code introduces us to a few more Zig features: strings, the `AnyWriter` interface, and `while`
+loops! I'll assume the while loop is obvious enough and focus on the other two.
+
+#### AnyWriter
+
+The `AnyWriter` interface is just like the `Allocator` one, except this is for outputting bytes
+instead of allocating them. This means that the caller can choose how and where the output is
+written to, e.g stdout, stderr or a text file. We'll make this choice in `main`.
+
+#### Strings and Slices
+
+Zig does not have a dedicated string type. Instead, strings are commonly stored in a type such as
+`[]const u8`. The empty square brackets indicate a *slice*, which is a primitive type  for an array
+with a runtime-known size. The `const` means our function can't modify the contents of the slice and
+`u8` is the element type, which is just a byte here.
+
+The slice is a very useful tool which is included in many other languages. They are used in Zig in
+favour of C's null-terminated `char *` pointers because of their better ergonomics and for being
+less error-prone. Read [the docs](https://ziglang.org/documentation/0.14.1/#Slices) if you don't
+have a clear understanding of what slices are or what they're used for.
+
+Our `chunk.code` arraylist exposes it's elements through a slice called `items`. We check against
+this slice's length for our while loop.
+
+We're using a while loop instead of a simple `for` because later instructions will have different
+sizes, so the offset may jump by more than 1 byte each iteration.
+
+Let's move on to writing the core disassembling logic.
+
+```zig
+// add after disassembleChunk:
+
+fn disassembleInstruction(
+    chunk: *const Chunk,
+    offset: usize,
+    writer: AnyWriter,
+) AnyWriter.Error!usize {
+    try writer.print("{d:04} ", .{offset});
+
+    const instruction: Chunk.OpCode = @enumFromInt(chunk.code.items[offset]);
+
+    switch (instruction) {
+        .@"return" => {
+            try writer.print("{s}\n", .{@tagName(instruction)});
+            return offset + 1;
+        },
+        // no default case needed (exhaustive switching!)
+    }
+}
+```
+
+
+We first print the offset, padded with `0`s to get to 4 characters, then use a `switch` statement
+to inspect the instruction. We only have one instruction for now so we just print it's name and
+return the next offset.
+
+Note that we don't need a default case for the `switch` since Zig can tell that we've covered all
+possibilities. We also won't be writing a `simpleInstruction` function like the book does.
+
+Finally, we'll apply our disassembler to our little test chunk in `main` by first creating a
+buffered writer to stdout and then calling `disassembleChunk`.
+
+```zig
+    try chunk.code.append(gpa, @intFromEnum(Chunk.OpCode.@"return"));
+
+    // --- new code start ---
+
+    const stdout_w = std.io.getStdOut().writer(); // We'll disassemble to stdout.
+    var stdout_bw = std.io.bufferedWriter(stdout_w); // Wrap stdout with a buffered writer.
+    const bw = stdout_bw.writer().any(); // Get the AnyWriter interface.
+
+    try disassembleChunk(&chunk, "test chunk", bw);
+
+    try stdout_bw.flush(); // Don't forget to flush! ;)
+
+    // --- new code end ---
+
+    chunk.deinit(gpa);
+```
+
+We use a buffered writer to build up our output in an intermediate array instead of writing to
+stdout piecemeal which is much slower. Buffered IO is not unique to Zig, but most languages do it
+behind the scenes automatically. Zig makes you explicitly create the buffer and flush it at the end.
+
+Now `zig build run` should yield some satisfying output:
+
+```sh
+ zig build run
+== test chunk ==
+0000 return
+```
+
+TODO: this doesn't work on 0.14.1 because of https://github.com/ziglang/zig/issues/24886
+
+### Constants and Values
+
+Now that we've set up the machinery to create and display bytecode chunks, it's time to add another
+instruction. The `constant` instruction will be used to load a constant value (e.g a literal number
+in the source code). This also means that constant values will need to be stored in a chunk
+somehow.
+
+We'll start for defining a type for values. For now this is just a 64-bit floating-point number,
+but this will be a more complex type when we add support for different types in the language.
+
+```zig
+// add after Chunk:
+
+const Value = f64;
+```
+
+#### The Constant Pool
+
+Constant values will be stored in a growable array (called the "constant pool") just like our
+bytecode. In the book this involves rewriting a dynamic array, but we already know how to use Zig's
+arraylist.
+
+```zig
+const Chunk = struct {
+    code: std.ArrayListUnmanaged(OpCode) = .empty,
+    constants: std.ArrayListUnmanaged(Value) = .empty, // new line
+```
+
+We also need to free this arraylist when the chunk is freed:
+
+```zig
+    pub fn deinit(chunk: *Chunk, gpa: Allocator) void {
+        chunk.code.deinit(gpa);
+        chunk.constants.deinit(gpa); // new line
+    }
+```
+
+Constants will be loaded when the instruction to load one is encountered. The next byte after this
+instruction will be the index of the value in the constant pool. Since we're only using a single
+byte to store this index, we're limited to `2^8 = 256` constants per chunk.
+
+We could append directly to the `constants` array to add each constant value but we'll also have to
+check if we have too many constants and also save the index of this new constant every time we add
+one. Let's write a function inside `Chunk` which solves both of those problems.
+
+```zig
+    // add inside Chunk after `empty`:
+    
+    const AddConstantError = Allocator.Error || error{TooManyConstants};
+
+    // Returns error.TooManyConstants if the chunk already has 256 constants.
+    pub fn addConstant(chunk: *Chunk, gpa: Allocator, value: Value) AddConstantError!u8 {
+        if (chunk.constants.items.len > std.math.maxInt(u8)) { 
+            return error.TooManyConstants;
+        }
+
+        // We've already made sure the length can fit in a u8.
+        const new_index: u8 = @intCast(chunk.constants.items.len);
+
+        try chunk.constants.append(gpa, value);
+
+        return new_index;
+    }
+```
+
+We first check to make sure the new index will fit in a single byte then we store the new index,
+add the value to the constant pool and return the index.
+
+This is a good showcase of the aforementioned error system. We've created a new error type,
+which is the union between the `Allocator.Error` error set and a new error set containing
+`TooManyConstants`. We combine these sets together with `||` and use it in our function signature.
+
+This way the caller will know *why* the function failed and can report the reason for the error.
+
+### Constant Instructions
+
+We'll need another variant in our `OpCode` enum to represent a "load constant" instruction.
+
+```zig
+    pub const OpCode = enum(u8) {
+        constant, // new line
+        @"return",
+    };
+```
+
+We put this new instruction to use in our test chunk.
+
+```zig
+    var chunk = Chunk.empty;
+
+    // new code start
+    const constant = try chunk.addConstant(gpa, 1.2);
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant));
+    try chunk.append(gpa, constant);Overall Curriculum Status: Pending 
+    // new code ends
+
+    try chunk.code.append(gpa, @intFromEnum(Chunk.OpCode.@"return"));
+```
+
+All that's left is to disassemble these constant instructions. Let's add another case inside
+`disassembleInstruction`
+
+```zig
+    switch (instruction) {
+        .@"return" => {
+            try writer.print("{s}\n", .{@tagName(instruction)});
+            return offset + 1;
+        },
+        // new case:
+        .constant => {
+            const constant = chunk.code.items[offset + 1];
+            const value = chunk.constants.items[constant];
+            try writer.print(
+                "{s:<16} {d:04} '{d}'\n",
+                .{ @tagName(instruction), constant, value },
+            );
+            return offset + 2;
+        },
+    }
+```
+
+I've forgone writing a `printValue` function. I'll do that later when we upgrade our `Value` type
+to support more than 1 type, which will give us a chance to look at Zig's formatting module!
+
+### Line Information
+
+If we want to give helpful error messages, we need to know the line numbers associated with each
+instruction. The approach we use or this is very simple, just another arraylist. Each element in the
+`lines` arraylist will give the line number of the corresponding byte in `code`. We'll need to add
+this field to `Chunk`.
+
+```zig
+const Chunk = struct {
+    code: std.ArrayListUnmanaged(u8),
+    lines: std.ArrayListUnmanaged(u32), // new line
+    constants: std.ArrayListUnmanaged(Value),
+
+    // ...
+
+    pub const empty = Chunk{
+        .code = .empty,
+        .lines = .empty, // new line
+        .constants = .empty,
+    };
+
+    // ...
+
+    pub fn deinit(chunk: *Chunk, gpa: Allocator) void {
+        chunk.code.deinit(gpa);
+        chunk.lines.deinit(gpa); // new line
+        chunk.constants.deinit(gpa);
+    }
+
+    // ...
+
+};
+```
+
+We'll require a line number to be passed whenever a byte is written to the chunk.
+
+ ```zig
+    pub fn append(chunk: *Chunk, gpa: Allocator, byte: u8, line: u32) Allocator.Error!void {
+        try chunk.code.append(gpa, byte);
+        try chunk.lines.append(gpa, line); // new line (and parameter)
+    }
+```
+
+#### Disassembling Line Information
+
+Ok, now we can add a line number to the instructions in our little bytecode program.
+
+```zig
+    // in main, modify 3 lines:
+
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant), 123);
+    try chunk.append(gpa, constant, 123);
+
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.@"return"), 123);
+```
+
+Of course, this information isn't useful apart from displaying it, so let's do just that in
+`disassembleInstruction`.
+
+```zig
+    // in disassembleInstruction:
+
+    try writer.print("{d:04} ", .{offset});
+
+    // new code starts
+    if (offset > 0 and chunk.lines.items[offset] == chunk.lines.items[offset - 1]) {
+        try writer.print("   | ", .{});
+    } else {
+        try writer.print("{d:>4} ", .{chunk.lines.items[offset]});
+    }
+    // new code ends
+
+    const instruction: Chunk.OpCode = @enumFromInt(chunk.code.items[offset]);
+```
+
+We're doing a bit of fancy formatting by replacing the line number with a line if it's the same as
+the line number of the previous instruction, but hopefully this code will make sense to you by now.
+
+Try `zig build run`-ning and, if all is well, you'll see a beautifully formatted disassembly.
+
+```
+ zig build run
+== test chunk ==
+0000  123 constant         0000 '1.2'
+0002    | return
+```
+
+That's all the code we're writing in this chapter! There is however one last change we should make
+before moving on. I've been adding all the code directly in `main.zig`, but we should separate
+things up before it gets too cluttered.
+
+### Organizing Files
+
+Starting with the `Value` type which, while pretty unimpressive right now, will grow into a more
+complicated type with it's own related functionality. Give it it's own file at `src/values.zig` and
+cut and paste the single line.
+
+```zig
+// file: src/values.zig
+
+// Remember to make it public with pub.
+pub const Value = f64;
+```
+
+Don't forget to mark the declaration with `pub` so that we can use it from other files.
+
+Now the `Chunk` struct, which will give me the opportunity to show you one last Zig feature. I
+promise it's worth it!
+
+#### Files are Structs
+
+In Zig, a file is implicitly a struct. What does this mean? Well, you can imagine the top level
+of a `.zig` file as being implicitly wrapped in `struct { ... }`. This means that fields can be
+declared at the top level and the struct defined by the file can be instantiated and used as data.
+
+This is useful for us because we can put our `Chunk` type into it's own file, declaring the fields
+and declarations at the top level and import it to use within `main`. Create a new file in
+`src/Chunk.zig` and copy the contents of the `Chunk` struct inside the curly braces into the file.
+
+```zig
+// file: src/Chunk.zig
+
+const Chunk = @This();
+
+const std = @import("std");
+const values = @import("values.zig"); // new!
+const Value = values.Value; // new!
+const Allocator = std.mem.Allocator;
+
+    code: std.ArrayListUnmanaged(u8),
+    lines: std.ArrayListUnmanaged(u32),
+    constants: std.ArrayListUnmanaged(Value),
+
+    pub const OpCode = enum(u8) {
+        constant,
+        @"return",
+    };
+
+    // <other declarations>
+```
+
+The imports also have to be copied over, including a new import of `Value` so our code can use them
+the same way. There's also one additional line: `const Chunk = @This()`. Since we're putting the
+type in it's own file, it doesn't have an identifier to be referred to by. We create this identifier
+by using the `@This()` builtin to capture the surrounding type which is the file in this case.
+
+The reason we didn't do this for `Value` is that it is not, nor will it be, a `struct`.
+
+Finally, the disassembly code. We'll move this into it's own file called `src/debug.zig`.
+Create this file and copy the two functions along with their required imports.
+
+```zig
+// file: src/debug.zig
+
+const std = @import("std");
+const AnyWriter = std.io.AnyWriter;
+const Chunk = @import("Chunk.zig")
+
+// Remember to make these public with `pub`!
+pub fn disassembleChunk(...) {
+    // ...
+}
+pub fn disassembleInstruction(...) {
+    // ...
+}
+```
+
+Disassembling depends on both `AnyWriter` and `Chunk` which we import. It's important to mark the
+functions `pub` so that they can be used from other files.
+
+Finally, add imports to these new files in `main.zig`.
+
+```zig
+const std = @import("std");
+const Chunk = @import("Chunk.zig");
+const debug = @import("debug.zig");
+const disassembleChunk = debug.disassembleChunk;
+
+pub fn main() !void {
+    // ...
+}
+```
+
+Check that everything still works with `zig build run` and when you're ready, move on to the next
+chapter where we'll build our own tiny virtual machine to feed some bytecode to.
+
+
+
+
+
+
+
+
+
+
+
+## Warning - Under Construction!
+
+This page is a work-in-progress and is only available to gather feedback. It will probably be
+re-written in a newer Zig version before being properly released.
