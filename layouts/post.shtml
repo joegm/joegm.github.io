@@ -2,6 +2,6 @@
 <head id="head">
 </head>
 <div id="content">
-  <div class="date" :text="$page.date.format('January 02, 2006')"></div>
+  <div class="date" :text="$page.date.format('Jan 2, 2006')"></div>
   <ctx :html="$page.content()"></ctx>
 </div>

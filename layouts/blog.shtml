@@ -6,7 +6,7 @@
     <a class="blog-listing" href="$loop.it.link()">
       <h2 :text="$loop.it.title"></h2>
       <p class="description" :text="$loop.it.description"></p>
-      <p class="date" :text="$loop.it.date.format('January 02, 2006')"></p>
+      <p class="date" :text="$loop.it.date.format('Jan 2, 2006')"></p>
     </a>
   </div>
 </div>
