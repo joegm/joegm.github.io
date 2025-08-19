@@ -8,10 +8,10 @@
 
 ## Warning - Under Construction!
 
-This page is a work-in-progress and is only available to gather feedback. It will probably be
-re-written in a newer Zig version before being properly released.
+This page is a work-in-progress and is only available to gather feedback. It may be re-written in a
+newer Zig version before being properly released.
 
-## Introduction
+## 00 Introduction
 
 [*Crafting Interpreters*](https://craftinginterpreters.com) by Robert Nystrom is a wonderful ([free
 to read!](https://craftinginterpreters.com/contents.html)) book which explains and walks you through
@@ -64,8 +64,21 @@ needed.
 
 First you're going to need to get Zig. Zig has not yet reached a stable release yet, so it's
 important you get the right version to follow along. Follow
-[this guide](https://ziglang.org/learn/getting-started/) to install zig version **0.14.1** (TODO) on
-your system. Once your done, run `zig version` to make sure you got the right one working.
+[this guide](https://ziglang.org/learn/ getting-started/) to install zig version **0.15.0** (TODO -
+wait for 0.15.0 release) on your system. Once your done, run `zig version` to make sure you got the
+right one working.
+
+```sh
+$ zig version
+0.15.0 # (TODO - wait for 0.15.0 to release)
+```
+
+Alternatively you can use one of the many **unofficial** version managers for zig if you want to use
+multiple zig versions across different projects. Here are a few popular ones:
+
+- [zigup](https://github.com/marler8997/zigup)
+- [zvm](https://github.com/tristanisham/zvm) 
+- [anyzig](https://github.com/marler8997/anyzig)
 
 ### `zig init`
 
@@ -162,10 +175,10 @@ we're now going to start from scratch.
 
 All you'll need to continue is the above `build.zig` and an empty `src/main.zig`
 
-## Chunks Of Bytecode
+## 01 Chunks Of Bytecode
 
 In the first chapter, We'll start by defining the structure of our bytecode, which are the basic
-instructions we'll compile source code into and then feed to the virtual machine to execute.
+instructions we'll compile source code into and then feed to the virtual machine to be executed.
 
 Before continuing, read the start of
 [Chunks of Bytecode](https://craftinginterpreters.com/chunks-of-bytecode.html), and keep the book
@@ -204,7 +217,7 @@ argument.
 Use `zig build run` to make sure everything's correct:
 
 ```
- zig build run
+$ zig build run
 Hello, Interpreters!
 ```
 
@@ -232,7 +245,7 @@ Let's wrap an arraylist inside a Zig `struct` to store our bytecode.
 // Add after main():
 
 const Chunk = struct {
-    code: std.ArrayListUnmanaged(u8),
+    code: std.ArrayList(u8),
 
     pub const OpCode = enum(u8) {
         @"return",
@@ -241,10 +254,10 @@ const Chunk = struct {
 ```
 
 Zig type declarations take the same form as imports with `const Name = type;` Our struct has one
-field: `code` of type `std.ArrayListUnmanaged(u8).` `ArrayListUnmanaged` is a *generic* type,
-meaning you can specify the type of the elements it stores. We're using `u8` (an unsigned 8-bit
-integer, aka a byte) as the element type rather than `OpCode` because as we'll see soon, the code
-stream can contain bytes other than opcodes.
+field: `code` of type `std.ArrayList(u8).` `ArrayList` is a *generic* type, meaning you can specify
+the type of the elements it stores. We're using `u8` (an unsigned 8-bit integer, aka a byte) as the
+element type rather than `OpCode` because as we'll see soon, the code stream can contain bytes other
+than opcodes.
 
 `OpCode` has been declared *inside* `Chunk`, meaning it will be referred to as `Chunk.OpCode`. For
 now we have just one instruction: `return`. Because `return` is a reserved keyword in Zig, we need
@@ -262,8 +275,8 @@ For initializing a chunk, we'll use a constant value rather than a function. We'
    
 ```
 
-`ArrayListUnmanaged` uses the same pattern to initialize an empty arraylist, so we can use the
-`.empty` value (shorthand for `ArrayListUmanaged.empty`) as the starting value for an empty chunk.
+`ArrayList` uses the same pattern to initialize an empty arraylist, so we can use the `.empty` value
+(shorthand for `ArrayListUmanaged.empty`) as the starting value for an empty chunk.
 
 Adding instructions and freeing the chunk both involve memory management, so it's time to cover one
 of Zig's more prominent features.
@@ -315,16 +328,16 @@ the first parameter and Zig allows member functions with this signature to be ca
 e.g `chunk.deinit(gpa);`, where `chunk` is an existing `Chunk` instance which is passed as a pointer
 in the first argument.
 
-For now it's just a wrapper around `ArrayListUnmanaged`'s own `append` function, but we'll add a
-little more functionality at the end of this chapter.
+For now it's just a wrapper around `ArrayList`'s own `append` function, but we'll add a little more
+functionality nearer the end of the chapter.
 
 It also takes the `Allocator` parameter by the name of `gpa` which stands for "General Purpose
 Allocator". This is shorter than "allocator" and also distinguishes it from an *arena allocator*,
 which is used differently.
 
-`ArrayListUnmanaged` also has a `.deinit()` function for freeing the contents, but since the chunk
-will be storing other data apart from the bytecode, it makes sense to write our own member function
-to free an entire `Chunk`.
+`ArrayList` also has a `.deinit()` function for freeing the contents, but since the chunk will be
+allocating other data apart from the bytecode, it makes sense to write our own member function to
+free an entire `Chunk`.
 
 ```zig
     // Add inside Chunk after `empty`:
@@ -336,8 +349,8 @@ to free an entire `Chunk`.
 ```
 
 You may have noticed the `Allocator.Error` in the function signature for the `append`, along with
-the `try` keyword when calling the append function. This would be a good time to talk about how
-Zig handles errors.
+the `try` keyword when calling the append function. This makes now a good time to talk about how
+error handling is done in Zig.
 
 #### Errors, Try and Catch
 
@@ -381,7 +394,7 @@ refer to [the docs](https://ziglang.org/documentation/0.14.1/#Errors) for more d
 
 ### Disassembling Chunks
 
-Let's finally put our new type to use in `main`!
+It's finally time to put our new type to use in `main`!
 
 ```zig
 pub fn main() !void {
@@ -392,45 +405,66 @@ pub fn main() !void {
 
     var chunk = Chunk.empty;
 
-    try chunk.append(gpa, @intFromEnum(Chunk.Opcode.@"return"));
-
     // Try removing this line and running the program. Does Zig catch the leak?
-    chunk.deinit(gpa);
+    defer chunk.deinit(gpa);
+
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.@"return"));
 }
 ```
 
 Since we need an `Allocator` to allocate the array, we need to pick a concrete implementation to
 use. I've chosen the standard library's `DebugAllocator`, which can detect and report memory leaks
-in case we forget to free things (`defer` runs the check before `main` exits). The `.allocator();`
-member function returns the `Allocator` interface object which we can then pass to our functions.
+in case we forget to free things. The `.allocator();` member function returns the `Allocator`
+interface object which we can then pass to our functions.
 
-If we try `zig build run` now, the code may run but nothing much appears to happen. Now we want to
-be able to display the bytecode in a chunk somehow. This means writing the bytecode *disassembler*,
-which will print the code in a human-readable format. Let's write a dissasembler function to pass
-our test chunk into.
+This code includes a new keyword: `defer` which is used both times we `deinit` something. Putting
+`defer` in front of a statement causes the statement to run when the scope exits. This makes freeing
+resources like memory or files easier to read and write as they only need to be written once just
+after the resource is created.
+
+Deferred statements are executed in reverse order at the end of the scope, so the chunk will be
+freed before the allocator is deinitialized, which is what we want. Check out the docs on
+[defer](https://ziglang.org/documentation/master/#defer) to learn more.
+
+If we try `zig build run` now, the code will hopefully run without errors, but nothing much appears
+to happen. Now we want to be able to display the bytecode in a chunk somehow. This means writing
+the bytecode *disassembler*, which will print the code in a human-readable format. Let's write a
+dissasembler function to pass our test chunk into.
 
 ```zig
 // add after `Chunk`
 
-fn disassembleChunk(chunk: *const Chunk, name: []const u8, writer: AnyWriter) AnyWriter.Error!void {
-    try writer.print("== {s} ==", .{name});
+pub fn disassembleChunk(
+    chunk: *const Chunk,
+    name: []const u8,
+    writer: *Io.Writer,
+) Io.Writer.Error!void {
+    try writer.print("== {s} ==\n", .{name});
 
     var offset: usize = 0;
 
     while (offset < chunk.code.items.len) {
-        offset = disassembleInstruction(chunk, offset);
+        offset = try disassembleInstruction(chunk, offset, writer);
     }
 }
 ```
 
-This code introduces us to a few more Zig features: strings, the `AnyWriter` interface, and `while`
+This code introduces us to a few more Zig features: strings, the `Io.Writer` interface, and `while`
 loops! I'll assume the while loop is obvious enough and focus on the other two.
 
-#### AnyWriter
+#### Io.Writer
 
-The `AnyWriter` interface is just like the `Allocator` one, except this is for outputting bytes
+The `Io.Writer` interface is similar to the `Allocator` one, except this is for outputting bytes
 instead of allocating them. This means that the caller can choose how and where the output is
-written to, e.g stdout, stderr or a text file. We'll make this choice in `main`.
+written to, e.g stdout, stderr, a text file or even a network socket! We'll make this choice in
+`main` but for now just add an alias for `Io` at the top of the file.
+
+```zig
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const Io = std.Io; // new line
+
+```
 
 #### Strings and Slices
 
@@ -441,8 +475,8 @@ with a runtime-known size. The `const` means our function can't modify the conte
 
 The slice is a very useful tool which is included in many other languages. They are used in Zig in
 favour of C's null-terminated `char *` pointers because of their better ergonomics and for being
-less error-prone. Read [the docs](https://ziglang.org/documentation/0.14.1/#Slices) if you don't
-have a clear understanding of what slices are or what they're used for.
+less error-prone. Read [the docs](https://ziglang.org/documentation/0.14.1/#Slices) to get a
+clearer understanding of what slices are or what they're used for.
 
 Our `chunk.code` arraylist exposes it's elements through a slice called `items`. We check against
 this slice's length for our while loop.
@@ -455,11 +489,11 @@ Let's move on to writing the core disassembling logic.
 ```zig
 // add after disassembleChunk:
 
-fn disassembleInstruction(
+pub fn disassembleInstruction(
     chunk: *const Chunk,
     offset: usize,
-    writer: AnyWriter,
-) AnyWriter.Error!usize {
+    writer: *Io.Writer,
+) Io.Writer.Error!usize {
     try writer.print("{d:04} ", .{offset});
 
     const instruction: Chunk.OpCode = @enumFromInt(chunk.code.items[offset]);
@@ -469,15 +503,13 @@ fn disassembleInstruction(
             try writer.print("{s}\n", .{@tagName(instruction)});
             return offset + 1;
         },
-        // no default case needed (exhaustive switching!)
     }
 }
 ```
 
-
-We first print the offset, padded with `0`s to get to 4 characters, then use a `switch` statement
-to inspect the instruction. We only have one instruction for now so we just print it's name and
-return the next offset.
+We first print the instruction's offset, padded to 4 characters, then use a `switch` statement to
+inspect the instruction. We only have one instruction for now so we just print it's name and return
+the next offset.
 
 Note that we don't need a default case for the `switch` since Zig can tell that we've covered all
 possibilities. We also won't be writing a `simpleInstruction` function like the book does.
@@ -486,36 +518,48 @@ Finally, we'll apply our disassembler to our little test chunk in `main` by firs
 buffered writer to stdout and then calling `disassembleChunk`.
 
 ```zig
-    try chunk.code.append(gpa, @intFromEnum(Chunk.OpCode.@"return"));
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.@"return"));
 
-    // --- new code start ---
+    // add at the end of main:
 
-    const stdout_w = std.io.getStdOut().writer(); // We'll disassemble to stdout.
-    var stdout_bw = std.io.bufferedWriter(stdout_w); // Wrap stdout with a buffered writer.
-    const bw = stdout_bw.writer().any(); // Get the AnyWriter interface.
+    const stdout_file = std.fs.File.stdout(); // Grab the stdout file handle
+    var buffer: [1024]u8 = undefined;  // Make an intermediate buffer
+    var stdout_writer: std.fs.File.Writer = stdout_file.writer(&buffer); // Create a writer
+    const writer: *Io.Writer = &stdout_writer.interface; // Obtain the writer's interface
 
-    try disassembleChunk(&chunk, "test chunk", bw);
+    try disassembleChunk(&chunk, "test chunk", writer);
 
-    try stdout_bw.flush(); // Don't forget to flush! ;)
-
-    // --- new code end ---
-
-    chunk.deinit(gpa);
+    try writer.flush(); // Don't forget to flush! ;)
 ```
 
-We use a buffered writer to build up our output in an intermediate array instead of writing to
-stdout piecemeal which is much slower. Buffered IO is not unique to Zig, but most languages do it
-behind the scenes automatically. Zig makes you explicitly create the buffer and flush it at the end.
+The call to `disassembleChunk` is straightforward but the meat of this code comes in how we create
+the `Writer` interface to stdout.
+
+#### File.Writer, Io.Writer and Buffered IO
+
+It's important to draw the distinction between the `File.Writer` and `Io.Writer`. The latter is
+an interface similar to `Allocator` while the first is an implementation of that interface.
+`File.Writer` contains a field called `interface` which is an `Io.Writer`, a pointer to which
+can be passed to functions which write.
+
+Creating a writer in Zig also means creating a buffer. The purpose of this buffer is to store output
+temporarily before it get's passed to the writer's underlying implementation. This is faster than
+writing output piecemeal as it reduces the number of calls to the implementation. Buffered IO is
+a common technique used in almost every language but is usually hidden behind the scenes. I've
+chosen to create a 1KiB buffer and have left it uninitialized with `undefined `.
+
+The buffer is stored in the `Io.Writer` interface rather than the implementation which is why it
+is passed as a pointer, since the interface stores state like how full the buffer is.
+
+A call to `flush` is required at the end to write out any leftover data in the buffer.
 
 Now `zig build run` should yield some satisfying output:
 
 ```sh
- zig build run
+$ zig build run
 == test chunk ==
 0000 return
 ```
-
-TODO: this doesn't work on 0.14.1 because of https://github.com/ziglang/zig/issues/24886
 
 ### Constants and Values
 
@@ -530,7 +574,7 @@ but this will be a more complex type when we add support for different types in 
 ```zig
 // add after Chunk:
 
-const Value = f64;
+pub const Value = f64;
 ```
 
 #### The Constant Pool
@@ -541,8 +585,16 @@ arraylist.
 
 ```zig
 const Chunk = struct {
-    code: std.ArrayListUnmanaged(OpCode) = .empty,
-    constants: std.ArrayListUnmanaged(Value) = .empty, // new line
+    code: std.ArrayList(OpCode),
+    constants: std.ArrayList(Value), // new line!
+
+    // ...
+
+    pub const empty = Chunk{
+        .code = .empty,
+        .constants = .empty // new line!
+    };
+    
 ```
 
 We also need to free this arraylist when the chunk is freed:
@@ -563,7 +615,7 @@ check if we have too many constants and also save the index of this new constant
 one. Let's write a function inside `Chunk` which solves both of those problems.
 
 ```zig
-    // add inside Chunk after `empty`:
+    // add inside Chunk after append:
     
     const AddConstantError = Allocator.Error || error{TooManyConstants};
 
@@ -585,15 +637,15 @@ one. Let's write a function inside `Chunk` which solves both of those problems.
 We first check to make sure the new index will fit in a single byte then we store the new index,
 add the value to the constant pool and return the index.
 
-This is a good showcase of the aforementioned error system. We've created a new error type,
-which is the union between the `Allocator.Error` error set and a new error set containing
-`TooManyConstants`. We combine these sets together with `||` and use it in our function signature.
+This is a good showcase of the aforementioned error system. We've created a new error type, which is
+the *union* between the `Allocator.Error` error set and a new error set containing `TooManyConstants`.
+We combine these sets together with `||` and use it in our function signature.
 
 This way the caller will know *why* the function failed and can report the reason for the error.
 
 ### Constant Instructions
 
-We'll need another variant in our `OpCode` enum to represent a "load constant" instruction.
+We need another variant in our `OpCode` enum to represent a "load constant" instruction.
 
 ```zig
     pub const OpCode = enum(u8) {
@@ -605,19 +657,21 @@ We'll need another variant in our `OpCode` enum to represent a "load constant" i
 We put this new instruction to use in our test chunk.
 
 ```zig
-    var chunk = Chunk.empty;
+    // inside main:
+
+    defer chunk.deinit(gpa);
 
     // new code start
     const constant = try chunk.addConstant(gpa, 1.2);
     try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant));
-    try chunk.append(gpa, constant);Overall Curriculum Status: Pending 
+    try chunk.append(gpa, constant);
     // new code ends
 
     try chunk.code.append(gpa, @intFromEnum(Chunk.OpCode.@"return"));
 ```
 
 All that's left is to disassemble these constant instructions. Let's add another case inside
-`disassembleInstruction`
+`disassembleInstruction`.
 
 ```zig
     switch (instruction) {
@@ -639,20 +693,28 @@ All that's left is to disassemble these constant instructions. Let's add another
 ```
 
 I've forgone writing a `printValue` function. I'll do that later when we upgrade our `Value` type
-to support more than 1 type, which will give us a chance to look at Zig's formatting module!
+to support more than 1 type, which will give us a chance to look at Zig's formatting module! For
+now, check out the new disassembly, now twice as big!
+
+```sh
+$ zig build run
+== test chunk ==
+0000 return
+0001 constant         0000 '1.2 '
+```
 
 ### Line Information
 
-If we want to give helpful error messages, we need to know the line numbers associated with each
-instruction. The approach we use or this is very simple, just another arraylist. Each element in the
-`lines` arraylist will give the line number of the corresponding byte in `code`. We'll need to add
-this field to `Chunk`.
+If we want to be able to give helpful error messages when a Lox program produces a runtime error, we
+need to know the line numbers associated with each instruction. The approach we use or this is very
+simple, just another arraylist. Each element in the `lines` arraylist will give the line number of
+the corresponding byte in `code`. We'll need to add this field to `Chunk`.
 
 ```zig
 const Chunk = struct {
-    code: std.ArrayListUnmanaged(u8),
-    lines: std.ArrayListUnmanaged(u32), // new line
-    constants: std.ArrayListUnmanaged(Value),
+    code: std.ArrayList(u8),
+    lines: std.ArrayList(u32), // new line
+    constants: std.ArrayList(Value),
 
     // ...
 
@@ -722,7 +784,7 @@ the line number of the previous instruction, but hopefully this code will make s
 Try `zig build run`-ning and, if all is well, you'll see a beautifully formatted disassembly.
 
 ```
- zig build run
+$ zig build run
 == test chunk ==
 0000  123 constant         0000 '1.2'
 0002    | return
@@ -741,7 +803,6 @@ cut and paste the single line.
 ```zig
 // file: src/values.zig
 
-// Remember to make it public with pub.
 pub const Value = f64;
 ```
 
@@ -766,13 +827,13 @@ and declarations at the top level and import it to use within `main`. Create a n
 const Chunk = @This();
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const values = @import("values.zig"); // new!
 const Value = values.Value; // new!
-const Allocator = std.mem.Allocator;
 
-    code: std.ArrayListUnmanaged(u8),
-    lines: std.ArrayListUnmanaged(u32),
-    constants: std.ArrayListUnmanaged(Value),
+    code: std.ArrayList(u8),
+    lines: std.ArrayList(u32),
+    constants: std.ArrayList(Value),
 
     pub const OpCode = enum(u8) {
         constant,
@@ -780,14 +841,15 @@ const Allocator = std.mem.Allocator;
     };
 
     // <other declarations>
+}
 ```
 
-The imports also have to be copied over, including a new import of `Value` so our code can use them
-the same way. There's also one additional line: `const Chunk = @This()`. Since we're putting the
-type in it's own file, it doesn't have an identifier to be referred to by. We create this identifier
-by using the `@This()` builtin to capture the surrounding type which is the file in this case.
+The necessary imports also have to be copied over, including a new import of `Value`. There's also
+one additional line: `const Chunk = @This()`. Since we're putting the type in it's own file, it
+doesn't have an identifier to be referred to by. We create this identifier by using the `@This()`
+builtin to capture the surrounding type, which is the file in this case.
 
-The reason we didn't do this for `Value` is that it is not, nor will it be, a `struct`.
+The reason we can't do this for `Value` is that it is not and won't be a `struct`.
 
 Finally, the disassembly code. We'll move this into it's own file called `src/debug.zig`.
 Create this file and copy the two functions along with their required imports.
@@ -796,7 +858,7 @@ Create this file and copy the two functions along with their required imports.
 // file: src/debug.zig
 
 const std = @import("std");
-const AnyWriter = std.io.AnyWriter;
+const Io = std.Io;
 const Chunk = @import("Chunk.zig")
 
 // Remember to make these public with `pub`!
@@ -808,13 +870,15 @@ pub fn disassembleInstruction(...) {
 }
 ```
 
-Disassembling depends on both `AnyWriter` and `Chunk` which we import. It's important to mark the
+Disassembling depends on both `Io` and `Chunk` which we import. It's important to mark the
 functions `pub` so that they can be used from other files.
 
-Finally, add imports to these new files in `main.zig`.
+Finally, add imports to these new files in `main.zig`, which should now include only the `main`
+function.
 
 ```zig
 const std = @import("std");
+const Io = std.Io;
 const Chunk = @import("Chunk.zig");
 const debug = @import("debug.zig");
 const disassembleChunk = debug.disassembleChunk;
@@ -827,15 +891,19 @@ pub fn main() !void {
 Check that everything still works with `zig build run` and when you're ready, move on to the next
 chapter where we'll build our own tiny virtual machine to feed some bytecode to.
 
+```sh
+$ tree src/
+src/
+├── Chunk.zig
+├── debug.zig
+├── main.zig
+└── values.zig
 
-
-
-
-
-
-
-
-
+$ zig build run
+== test chunk ==
+0000  123 constant         0000 '1.2'
+0002    | return
+```
 
 ## Warning - Under Construction!
 
