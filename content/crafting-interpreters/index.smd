@@ -1,0 +1,9 @@
+---
+.title = "Craft an Interpreter in Zig",
+.date = @date("2025-08-17"),
+.author = "Joe Mckay",
+.layout = "crafting-interpreters.shtml",
+.draft = false,
+---
+
+A tutorial series for [Crafting Interpreters](https://craftinginterpreters.com/) in [Zig](https://ziglang.org/).

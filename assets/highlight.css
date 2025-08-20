@@ -1,19 +1,29 @@
 code .keyword,
 code .keyword_modifier,
 code .keyword_function,
+code .keyword_return,
 code .keyword_type,
-code .keyword_exception {
+code .keyword_exception,
+code .keyword_repeat,
+code .keyword_conditional,
+code .constant_builtin {
   color: var(--yellow);
   font-weight: bold;
 }
 
+
 code .type_builtin,
-code .function_builtin code .keyword_exception {
+code .function_builtin,
+code .keyword_exception {
   color: var(--yellow);
 }
 
 code .variable {
   color: var(--fg0);
+}
+
+code .function {
+  color: var(--quartz);
 }
 
 code .string {

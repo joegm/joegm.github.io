@@ -1,0 +1,742 @@
+---
+.title = "02 - A Virtual Machine",
+.date = @date("2025-08-20"),
+.author = "Joe Mckay",
+.layout = "post.shtml",
+.draft = false,
+---
+
+
+A virtual machine (VM) is like a very simple simulated computer. You feed it a series of
+instructions (a chunk) and it executes them one by one. A useful VM also has it's own memory and
+some form of input/output.
+
+In this chapter we'll build a baby VM which can perform basic arithmetic. Hopefully we'll be able to
+grow this VM into a more fully fledged one by the end of this series.
+
+We'll create our VM in it's own struct-file like we did for `Chunk` at the end of the last chapter.
+
+```zig
+// (new file: src/VM.zig)
+
+const VM = @This();
+
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const Chunk = @import("Chunk.zig");
+const values = @import("values.zig");
+const Value = values.Value;
+
+gpa: Allocator,
+chunk: *const Chunk,
+
+pub fn init(gpa: Allocator, chunk: *const Chunk) VM {
+    return .{
+        .gpa = gpa,
+        .chunk = chunk,
+    };
+}
+
+pub fn deinit(vm: *VM) void {
+    _ = vm;
+}
+```
+
+I've already diverged from the book's C version in two ways. Firstly, the VM stores an `Allocator`
+as well as the chunk it executes so that it can make it's own memory allocations. Secondly, there
+is no global singleton `vm` variable. Instead, the `init` function creates and returns a VM object.
+`init` also takes the allocator which is stored in `VM` to avoid passing it to every VM function
+which allocates.
+
+`deinit` doesn't have anything to free yet, but it's worth putting it in place for later. Zig
+doesn't allow unused values so we have to discard the parameter with `_ = vm;`.
+
+The VM doesn't do anything yet, but let's hook it up in `main` before we get started.
+
+```zig
+// in main.zig
+const Chunk = @import("Chunk.zig");
+const VM = @import("VM.zig"); // new line!
+const debug = @import("debug.zig");
+```
+
+```zig
+    // at the end of main:
+
+    try interpret(gpa, &chunk);
+```
+
+We haven't implemented `interpret` yet. In the book, this function is implemented inside the VM
+and ends up taking the source code as a parameter, compiling it, and then running it on the VM. I
+don't feel that code in the VM module should be responsible for compiling, so I'll later create the
+`interpret` function in `main.zig` which will take a chunk, create a VM and run it.
+
+```zig
+// add after main:
+
+fn interpret(gpa: Allocator, chunk: *const Chunk) VM.RunError!void {
+    var vm = VM.init(gpa, chunk);
+    defer vm.deinit();
+
+    try vm.run();
+}
+```
+
+## An Instruction Execution Machine
+
+Let's define `run` in the VM file.
+
+```zig
+// in VM.zig, add after deinit:
+
+pub const RunError = Allocator.Error || error{RuntimeError};
+
+pub fn run(vm: *VM) RunError!void {
+    vm.ip = 0;
+}
+```
+
+We create a new error set just like we did for `addConstant` in the previous chapter. `RuntimeError`
+will be returned any time the program causes an error at runtime.
+
+This introduces a new piece of state in the VM: the *instruction pointer*. This points to the
+next instruction to be executed. This exact concept also exists inside real-life CPUs. We'll use
+ip as an index into `chunk.code.items`.
+
+```zig
+// VM.zig
+
+gpa: Allocator,
+chunk: *const Chunk, // new line!
+ip: usize,
+
+pub fn init(gpa: Allocator, chunk: *const Chunk) VM {
+    return .{
+        .gpa = gpa,
+        .chunk = chunk, // new line!
+        .ip = 0,
+    };
+}
+```
+
+Let's flesh out `run` to actually start processing bytecode.
+
+```zig
+pub fn run(vm: *VM) RunError!void {
+    vm.ip = 0;
+
+    // new code:
+    while (true) {
+        const instruction: Chunk.OpCode = @enumFromInt(vm.nextByte());
+
+        switch (instruction) {
+            .@"return" => return,
+        }
+    }
+}
+```
+
+When we start running a chunk, we need to make sure the instruction pointer gets reset to 0.
+
+The while loop reads instructions and dispatches them with a `switch`. Funnily enough, the `return`
+instruction translates to a `return` in Zig. We also use a convenience function to read the
+next byte of code. The book uses a C macro, but Zig doesn't have this (spoiler: it has something
+better!). `readByte`  looks like this:
+
+```zig
+// add after run:
+
+fn readByte(vm: *VM) u8 {
+    const byte = vm.chunk.code.items[vm.ip];
+    vm.ip += 1;
+    return byte;
+}
+```
+
+We also need to handle the `constant` instruction, and since there's not much we can do with values
+just yet we'll make it print the given constant to the screen.
+
+```zig
+        switch (instruction) {
+            // new case:
+            .constant => {
+                const constant = vm.readConstant();
+                try vm.output.print("{d}\n", .{constant});
+            },
+            .@"return" => return,
+        }
+```
+
+We use `readConstant` which reads the next byte and uses it to look up a value in the  chunk's
+constant pool. You may also notice a new field which we're about to add.
+
+```zig
+// add after run:
+
+fn readConstant(vm: *VM) Value {
+    const constant = vm.readByte();
+    return vm.chunk.constants.items[constant];
+}
+```
+
+You may have noticed that we wrote the value to a field `vm.output` which doesn't exist yet. If
+you haven't guessed by now, we're going to be using the same `Io.Writer` interface for the VM to
+write output to. This means we can easily change where the output goes which would be especially
+useful if we want to write unit tests for our VM, as we can make it write output into a memory
+buffer which we can then check for correctness.
+
+Let's add this new field.
+
+```zig
+// VM.zig
+
+gpa: Allocator,
+output: *Io.Writer, // new line!
+chunk: *const Chunk,
+ip: usize,
+    
+pub fn init(gpa: Allocator, output: *Io.Writer, chunk: *const Chunk) VM {
+    return .{
+        .gpa = gpa,
+        .output = output, // new line (and parameter)!
+        .chunk = chunk,
+        .ip = 0,
+    };
+}
+
+// ...
+
+pub const RunError = Allocator.Error || Io.Writer.Error || error{RuntimeError};
+//                                      ^^^^^^^^^^^^^^^ -- add this!
+```
+
+Since writing is now another possible cause of failure, we need to add to `RunError`.
+
+Of course, this means giving it something to write to. We can reuse the same stdout writer we
+created for disassembling chunks in `main`.
+
+```zig
+// main.zig
+
+    // in main(), add 1 argument:
+
+    try interpret(gpa, writer, &chunk);
+}
+```
+
+```zig
+// main.zig
+    
+fn interpret(gpa: Allocator, output: *Io.Writer, chunk: *const Chunk) VM.RunError!void {
+    var vm = VM.init(gpa, output, chunk);
+    // ...
+```
+
+We can't forget to flush the writer's buffer once we're finished, otherwise whatever output has
+been built up will never be displayed. We only want to flush once when the program is finished, so
+let's do it at the end of `interpret`.
+
+```zig
+// main.zig
+
+    // in `interpret`:
+
+    try vm.run();
+
+    try output.flush(); // new line!
+}
+```
+
+
+Ok, Let's see our VM in action!
+
+```
+$ zig build run
+== test chunk ==
+0000  123 constant         0000 '1.2'
+0002    | return
+1.2
+```
+
+We get the familiar disassembly, and then the VM spits out the value `1.2`. Great, but not very
+revealing. It would be nice to get a more detailed trace of the VM executing each instruction.
+
+## Execution Tracing
+
+To help us understand and debug our VM, we need some sort of tracing mechanism so we can see how
+it's state changes as it executes each instruction. Let's define a boolean so we can toggle this
+tracing on and off.
+
+```zig
+// VM.zig
+// add after `deinit`:
+
+const debug_trace = true;
+```
+
+Now, before each instruction is executed, we'll disassemble it on the fly.
+
+```zig
+// VM.zig
+
+    // inside `run`:
+
+    while (true) {
+        // new code:
+        if (debug_trace) {
+            _ = try debug.disassembleInstruction(vm.chunk, vm.ip, vm.output);
+        }
+        // new code ends
+
+        const instruction: Chunk.OpCode = @enumFromInt(vm.readByte());
+```
+
+The book uses a C macro for `debug_trace` whereas we're using an ordinary boolean. If you're a
+performance-minded reader you may worry that checking a boolean for every instruction would slow
+the VM down, and you'd be right, if it weren't for how Zig's compiler analyzes code.
+
+### Lazy Compilation
+
+This is not a feature of our interpreter, but one of the Zig compiler itself. Zig's compiler is
+*lazy* in the sense that it doesn't compile or even look at code if it isn't definitely being used.
+Since `debug_trace`'s value is a compile-time (aka 'comptime') known constant, the compiler can
+remove the if statement and either include or omit the code depending on `debug_trace`. This is
+effectively *conditional compilation*, all with no extra language features!.
+
+Let's add the import to `debug.zig` before we move on.
+
+```zig
+// VM.zig
+
+// ...
+const values = @import("values.zig");
+const Value = values.Value;
+const debug = @import("debug.zig"); // new line!
+```
+
+## A Value Stack Manipulator
+
+Our VM is currently lacking a big feature: memory. "Real" programs that run on "real" machines
+have a large address space of memory to do with as they like. We're going to stick with just
+one kind of memory for now, that being *stack memory*
+
+A stack is a structure where values can be added ("pushed") or removed ("popped"), usually one at a
+time. These values are always added/removed from the "top" of the stack. So popping always yields
+the last value that was pushed. This is also called a "first-in first-out" (FIFO) structure.
+
+Our VM is going to have it's own stack, and instructions to push, pop or manipulate the values on
+it.
+
+I recommend reading through the
+[corresponding
+book chapter](https://craftinginterpreters.com/a-virtual-machine.html#a-value-stack-manipulator)
+which explains the stack with a detailed explanation involving at least one beautiful illustration
+of pancakes.
+
+Let's add a stack to our VM's internal state.
+
+```zig
+gpa: Allocator,
+output: *Io.Writer,
+chunk: *const Chunk,
+ip: usize,
+stack: [stack_size]Value, // new line!
+stack_top: usize, // new line!
+
+const stack_size = 256; // new line!
+
+pub fn init(gpa: Allocator, output: *Io.Writer, chunk: *const Chunk) VM {
+    return .{
+        .gpa = gpa,
+        .output = output,
+        .chunk = chunk,
+        .ip = 0,
+        .stack = undefined, // new line!
+        .stack_top = 0, // new line!
+    };
+}
+```
+
+We're going to store our stack in a fixed-size array with an index to track the top value. You could
+try out using an `ArrayList` instead, but it won't be necessary.
+
+Whenever we start running a chunk, we need to empty the stack by resetting `stack_top` to `0`.
+
+```zig
+// VM.zig
+
+pub fn run(vm: *VM) RunError!void {
+    vm.ip = 0;
+    vm.stack_top = 0; // new line!
+```
+
+The stack has 2 very simple opposite operations: Push a value to the top of the stack, or pop a
+value and return it.
+
+```zig
+// VM.zig   
+
+// add after `deinit`:
+
+fn push(vm: *VM, value: Value) void {
+    vm.stack[vm.stack_top] = value;
+    vm.stack_top += 1;
+}
+
+fn pop(vm: *VM) Value {
+    vm.stack_top -= 1;
+    return vm.stack[vm.stack_top];
+}
+```
+
+## Tracing the Stack
+
+Let's improve debug tracing by displaying the stack at each instruction.
+
+```zig
+        if (debug_trace) {
+            // new code:
+            try vm.output.print("          ", .{});
+            for (vm.stack[0..vm.stack_top]) |value| {
+                try vm.output.print("[{d}]", .{value});
+            }
+            try vm.output.print("\n", .{});
+            // new code ends
+            _ = try debug.disassembleInstruction(vm.chunk, vm.ip, vm.output);
+        }
+```
+
+Time to revisit our two instructions. Firstly, `constant` should load a value on to the stack.
+
+```zig
+// VM.zig
+
+    // in  `run`:
+
+            .constant => {
+                const constant = vm.readConstant();
+                vm.push(constant); // changed line!
+            },
+```
+
+For now, `return` will serve the extra purpose of popping and printing the top value of the stack.
+This is of course temporary, just until we get real functions and print statements.
+
+```zig
+// VM.zig
+
+    // in `run`:
+
+            .@"return" => {
+                const value = vm.pop(); // new line!
+                try vm.output.print("{d}\n", .{value}); // new line!
+                return;
+            },
+```
+
+## An Arithmetic Calculator
+
+Now that we have some stack memory to store data, let's add some instructions to do stuff with
+it. We'll just add basic arithmetic operators in this chapter, and by the end we'll have a (very
+limited) stack-based calculator.
+
+Starting with a simple operation: negation. The `negate` instruction will (drum roll...) *negate*
+the number at the top of the stack. Adding an instruction now involves three steps.
+
+First, adding the opcode...
+
+```zig
+// Chunk.zig
+
+pub const OpCode = enum(u8) {
+    negate, // new line!
+    constant,
+    @"return",
+};
+```
+
+Second, implementing it in the VM...
+
+```zig
+// VM.zig
+
+pub fn run(vm: *VM) RunError!void {
+
+    // ...
+
+        switch (instruction) {
+            .negate => vm.push(-vm.pop()), // new line!
+            .constant => {
+```
+
+And lastly, disassembling it.
+
+```zig
+// debug.zig
+
+    // in `disassembleInstruction`:
+
+    switch (instruction) {
+        .@"return", .negate => { // modified line!
+            try writer.print("{s}\n", .{@tagName(instruction)});
+            return offset + 1;
+        },
+```
+
+Disassembling the `negate` instruction is just as simple as for `return`, so we can add it as
+another value which maps to the same switch prong.
+
+Let's try this out with our trusty test chunk.
+
+```zig
+// main.zig
+
+    // in `main`:
+
+    try chunk.append(gpa, constant, 123);
+
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.negate), 123); // new line!
+
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.@"return"), 123);
+```
+
+We negate the constant before returning it should replace the stack value with the negated value,
+and the `return` instruction will print it out.
+```
+$ zig build run
+== test chunk ==
+0000  123 constant         0000 '1.2'
+0002    | negate
+0003    | return
+
+0000  123 constant         0000 '1.2'
+          [1.2]
+0002    | negate
+          [-1.2]
+0003    | return
+-1.2
+```
+
+As you can see, disassembling each instruction as well as displaying the stack gives a useful view
+into the VM's state as it executes.
+
+### Binary Operators
+
+Operations like addition which take two operands to produce a result are a little bit more
+complicated than unary negation, but still not that hard. An binary expression like `1 - 2` will
+compile into something like this:
+
+```
+constant 1
+constant 2
+subtract
+```
+
+This means that the `subtract` instruction must pop the top two values off the stack and subtract
+the value of the first from the second. The key part to understand is that operands are popped in
+*reverse order* of being pushed.
+
+Let's add the 4 basic binary arithmetic operations all at once.
+
+```zig
+// Chunk.zig
+
+pub const OpCode = enum(u8) {
+    add,
+    subtract,
+    multiply,
+    divide,
+    // ...
+```
+
+To execute them, the book uses some C macro magic, wheras we'll use an interesting feature of Zig's
+`switch` statement.
+
+```zig
+// VM.zig
+
+    // in `run`:
+
+        switch (instruction) {
+            // new case(s):
+            inline .add, .subtract, .multiply, .divide => |binary_op| {
+                const b = vm.pop();
+                const a = vm.pop();
+                vm.push(switch (binary_op) {
+                    .add => a + b,
+                    .subtract => a - b,
+                    .multiply => a * b,
+                    .divide => a / b,
+                    else => comptime unreachable,
+                });
+            },
+    
+```
+
+OK, this might be a lot to take in, but if you focus on the core logic, we obtain the second
+operand with the first `pop()` and the first operand with the second `pop()`. Then we push the
+result of another switch statement which uses the value of the specific opcode which we captured
+in `binary_op`.
+
+#### Inline Switch Prongs and `comptime unreachable`
+
+In the code above, we handle all 4 binary operators in the same switch prong. We did the same
+thing with disassembling both `return` and `negate` with a single switch prong, but in this case
+we're also using the `inline` keyword as well as two unfamiliar keywords which appear in the inner
+`switch` expression.
+
+The `inline` keyword before a `switch` case causes the compiler to generate a *different* switch
+prong for every possible value the case could capture. This means the code above would first be
+transformed into something like this:
+
+```zig
+        switch (instruction) {
+            // new case(s):
+            .add => |binary_op| {
+                const b = vm.pop();
+                const a = vm.pop();
+                vm.push(switch (binary_op) {
+                    .add => a + b,
+                    .subtract => a - b,
+                    .multiply => a * b,
+                    .divide => a / b,
+                    else => comptime unreachable,
+                });
+            },
+            .subtract => |binary_op| {
+                const b = vm.pop();
+                const a = vm.pop();
+                vm.push(switch (binary_op) {
+                    .add => a + b,
+                    .subtract => a - b,
+                    .multiply => a * b,
+                    .divide => a / b,
+                    else => comptime unreachable,
+                });
+            },
+            // ... etc.
+```
+
+This allows the compiler to know the value for each generated prong *at compile-time* because each
+possible value gets it's own prong. This means that the inner `switch` expression can be evaluated
+at compile-time, reducing the code to this:
+
+```zig
+        switch (instruction) {
+            // new case(s):
+            .add => |binary_op| {
+                const b = vm.pop();
+                const a = vm.pop();
+                vm.push(a + b);
+            },
+            .subtract => |binary_op| {
+                const b = vm.pop();
+                const a = vm.pop();
+                vm.push(a - b);
+            },
+            // ... etc.
+```
+
+Of course, we could have written it like this in the first place, but why repeat code when you can
+avoid it?
+
+Now what's up with the `comptime unreachable`? Both of these keywords deserve their own fuller
+explanation, but in this context `unreachable` asserts that the `else` branch will never be reached
+and `comptime` makes this assertion at compile-time. Put togther, this asserts that the compiler
+will never need to analyze the `else` branch, which we can do because we're handling all the values
+which the outer case captures in `binary_op`.
+
+The `comptime` keyword is especially interesting as it's an incredibly powerful alternative to C's
+macros, and I hope to get the chance to use it to more depth in a later chapter.
+
+For now though, let's make sure we can disassemble these new instructions before we put them to
+the test.
+
+```zig
+// debug.zig
+
+    // in `disassembleInstruction`:
+    switch (instruction) {
+        .@"return",
+        .negate,
+        .add, // new line!
+        .subtract, // new line!
+        .multiply, // new line!
+        .divide, // new line!
+        => {
+            try writer.print("{s}\n", .{@tagName(instruction)});
+            return offset + 1;
+        },
+```
+
+Now we can put together a more complex calculation in `main`.
+
+```zig
+// main.zig
+
+    // in `main`:
+    var constant = try chunk.addConstant(gpa, 1.2); // make `var`!
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant), 123);
+    try chunk.append(gpa, constant, 123);
+
+    constant = try chunk.addConstant(gpa, 3.4); // new line!
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant), 123); // new line!
+    try chunk.append(gpa, constant, 123); // new line!
+
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.add), 123); // new line!
+
+    constant = try chunk.addConstant(gpa, 5.6); // new line!
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant), 123); // new line!
+    try chunk.append(gpa, constant, 123); // new line!
+
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.divide), 123); // new line!
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.negate), 123);
+
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.@"return"), 123);
+```
+
+A an extra challenge, imagine how this code works on the stack and try to figure out the
+mathematical notation which this corresponds to.
+
+```=html
+<details>
+    <summary>Click for solution</summary>
+    <code>-((1.2 + 3.4) / 5.6)</code>
+</details>
+```
+
+Now it's time to let our VM do some real work!
+
+```
+$ zig build run
+== test chunk ==
+0000  123 constant         0000 '1.2'
+0002    | constant         0001 '3.4'
+0004    | add
+0005    | constant         0002 '5.6'
+0007    | divide
+0008    | negate
+0009    | return
+
+0000  123 constant         0000 '1.2'
+          [1.2]
+0002    | constant         0001 '3.4'
+          [1.2][3.4]
+0004    | add
+          [4.6]
+0005    | constant         0002 '5.6'
+          [4.6][5.6]
+0007    | divide
+          [0.8214285714285714]
+0008    | negate
+          [-0.8214285714285714]
+0009    | return
+-0.8214285714285714
+```
+
+Awesome! We can see how the stack grows and shrinks as instructions which produce and consume values
+are executed.
+
+This is the last bytecode we're going to need to write by hand. In the next chapter, we'll start the
+process of parsing source code.

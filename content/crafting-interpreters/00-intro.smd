@@ -1,0 +1,176 @@
+---
+.title = "00 - Introduction",
+.date = @date("2025-08-17"),
+.author = "Joe Mckay",
+.layout = "post.shtml",
+.draft = false,
+---
+
+[*Crafting Interpreters*](https://craftinginterpreters.com) by Robert Nystrom is a wonderful ([free
+to read!](https://craftinginterpreters.com/contents.html)) book which explains and walks you through
+writing a complete programming language interpreter. It goes through the major steps of writing
+an  interpreter, going from source code to lexing tokens, parsing into an abstract syntax tree or
+compiling to bytecode, and building up the runtime environment for a running program.
+
+In the [second part](https://craftinginterpreters.com/a-bytecode-virtual-machine.html) of this book,
+you rewrite this interpreter in C and learn about compiling source code to lower-level bytecode
+which is then run on a custom built *virtual machine*. In this series I will supplement this part of
+the book by giving a tutorial on writing the same interpreter in [Zig](https://ziglang.org/).
+
+## What's A Zig?
+
+[Zig](https://ziglang.org/) is a language similar to C, it's relatively low level and requires the
+programmer to manually manage memory. It is also a lot more modern than C, and has many distinctive
+features which make it much more approachable and ergonomic. I'll use this series to teach you how
+to use Zig well, focusing on how it addresses the challenges of low-level programming compared to C.
+
+My hope is that if you read this along with *Crafting Interpreters*, you'll learn the techniques
+used to create an interpreter along with an exciting new programming language.
+
+## How to Read
+
+This series is only a **supplement** to *Crafting Interpreters*. I will not be explaining the
+interpreter-related concepts to the same depth, and you'll have to refer back to the book for
+well-illustrated explanations of interpreter tech. You'll come here to learn how to implement those
+concepts in Zig, and how it differs from the original C code.
+
+## Prerequisites
+
+I'll assume you know how to code, but are new to programming with a non memory-managed language like
+C or Zig. You should at least know what a pointer is.
+
+I strongly recommend reading at least the [Welcome](https://craftinginterpreters.com/welcome.html)
+section of the book to give yourself an idea of what you're getting into, and the toy scripting
+language we're going to be implementing called *Lox*.
+
+If you want to be extra prepared, you can start by doing the
+[first half](https://craftinginterpreters.com/a-tree-walk-interpreter.html) of the book, which
+implements a simpler interpreter in Java and will give you a good idea of the overall process
+of interpreting. If you're brave you can skip that bit and refer back to parts of it if and when
+needed.
+
+# Setting Up
+
+Before we start writing, I'll give you the step-by-step on how to set up a new Zig project.
+
+## Download Zig
+
+First you're going to need to get Zig. Zig has not yet reached a stable release, so it's important
+that you get the right version to follow along. Follow
+[this guide](https://ziglang.org/learn/ getting-started/) to install zig version **0.15.0** (TODO -
+wait for 0.15.0 release) on your system. Once your done, run `zig version` to make sure you got the
+right one working.
+
+```sh
+$ zig version
+0.15.0  (TODO - wait for 0.15.0 to release)
+```
+
+Alternatively you can use one of the many **unofficial** version managers for zig if you want to use
+multiple zig versions across different projects. Here are a few popular ones:
+
+- [zigup](https://github.com/marler8997/zigup)
+- [zvm](https://github.com/tristanisham/zvm) 
+- [anyzig](https://github.com/marler8997/anyzig)
+
+## `zig init`
+
+To start a new project, first create an empty directory for it, I've called mine "zlox". Then, in
+the command line, `cd` into that directory and run `zig init`.
+
+```sh
+$ mkdir zlox
+$ cd zlox/
+$ zig init
+info: created build.zig
+info: created build.zig.zon
+info: created src/main.zig
+info: created src/root.zig
+info: see `zig build --help` for a menu of options
+```
+
+ This command initializes a dummy zig project which I encourage you to explore. Let's pick it apart.
+
+## `build.zig`
+
+Zig comes with it's own *build system*, a tool which makes it more convenient to build programs  by
+automating tasks like fetching dependencies, compiling and testing. Many build systems exist for C
+such as Make, Cmake or Ninja. Zig just has one, and you use it by writing a script *in Zig* called
+`build.zig` which tells it how your program is built.
+
+All this script does is construct a graph structure which describes the dependencies between
+different build *steps*. For example, the step to run your program will depend on the step to
+compile it.
+
+`zig init` has created an example `build.zig` with plenty of comments to help you understand how
+it works. Feel free to read this if your interested, but our build process is going to be pretty
+simple for now. This is the `build.zig` we're going to use.
+
+```zig
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    // Allow the user to specify the target platform and optimization level.
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    // We will create a module for our entry point, 'main.zig'.
+    const exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // This creates a step to compile our module into an executable.
+    const exe = b.addExecutable(.{
+        .name = "zlox",
+        .root_module = exe_mod,
+    });
+
+    // Make sure to compile the executable when running `zig build`
+    b.installArtifact(exe);
+
+    // Create a step to run the compiled program.
+    const run_cmd = b.addRunArtifact(exe);
+
+    // Add a dependency from running the program to compiling it.
+    run_cmd.step.dependOn(b.getInstallStep());
+
+    // Pass through arguments recieved by the build command,
+    // like this: `zig build run -- arg1 arg2 etc`
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+
+    // Provide the run step to the user: `zig build run`.
+    const run_step = b.step("run", "Run the app");
+    run_step.dependOn(&run_cmd.step);
+}
+```
+
+Don't worry, I'll cover the details of the zig syntax when we start writing the proper code. All you
+need to understand for now is that we're creating a *module* for our program, making that module be
+compiled into an executable when `zig build` is run, and also creating a `zig build run` command to
+run our program more conveniently.
+
+When you get more comfortable with the build system you may want to separate your program into
+multiple modules or add unit tests, but for now you can put it out of your mind as we won't be
+touching it again for a while.
+
+## `build.zig.zon`
+
+You'll also notice a `build.zig.zon` file, which you can completely ignore (and even delete) as
+it's only needed if your using external libraries or creating your own, and we won't be.
+
+## `src/`
+
+All your Zig source code will go in the `src/` directory. You'll notice two files are already there.
+
+1. `main.zig`: contains the entry point of your program as referenced by `build.zig`.
+2. `root.zig`: the root of your library, if you're creating a library. You can delete this file.
+
+Feel free to inspect `main.zig` to see a small example program. You can also delete its contents as
+we're going to start from scratch.
+
+All you'll need to continue to the first chapter is the above `build.zig` and an empty
+`src/main.zig`.
