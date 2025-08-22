@@ -37,8 +37,13 @@ global namespace.
 
 The function signature also carries some important information. First, functions must be marked
 `pub` for public if they are used outside the same file. The return type `!void` can be read as "any
-error or `void`". The exclamation mark (`!`) is used to denote that an error may be returned. We'll
-learn about Zig's interesting error system soon.
+error or `void`". The exclamation mark (`!`) is used to denote that an error may be returned.
+
+When an error is returned from `main`, it will be printed and the program will terminate with a
+non-zero exit code to indicate failure. This is something I'll rely heavily on throughout this
+series, but I encourage you to think about how you can handle failure more elegantly wherever
+possible. We'll learn about Zig's interesting error system soon.
+
 
 Inside `main`, we call `std.debug.print`, which prints formatted text a la `printf` to the standard
 error stream. The "{s}" is a placeholder for a string value which is provided in the second
@@ -351,22 +356,37 @@ Finally, we'll apply our disassembler to our little test chunk in `main` by firs
 buffered writer to stdout and then calling `disassembleChunk`.
 
 ```zig
+    // in `main`:
+
     try chunk.append(gpa, @intFromEnum(Chunk.OpCode.@"return"));
 
-    // add at the end of main:
-
-    const stdout_file = std.fs.File.stdout(); // Grab the stdout file handle
-    var buffer: [1024]u8 = undefined;  // Make an intermediate buffer
-    var stdout_writer: std.fs.File.Writer = stdout_file.writer(&buffer); // Create a writer
-    const writer: *Io.Writer = &stdout_writer.interface; // Obtain the writer's interface
-
+    // new code starts
     try disassembleChunk(&chunk, "test chunk", writer);
 
     try writer.flush(); // Don't forget to flush! ;)
+    // new code ends
+}
 ```
 
 The call to `disassembleChunk` is straightforward but the meat of this code comes in how we create
 the `Writer` interface to stdout.
+
+```zig
+    // in `main`:
+
+    const gpa = debug_allocator.allocator();
+
+    // new code starts
+    const stdout_file = std.fs.File.stdout(); // Grab the stdout file handle
+    var buffer: [1024]u8 = undefined;  // Make an intermediate buffer
+    var stdout_writer: std.fs.File.Writer = stdout_file.writer(&buffer); // Create a writer
+    const writer: *Io.Writer = &stdout_writer.interface; // Obtain the writer's interface
+    // new code ends
+
+    var chunk = Chunk.empty;
+```
+
+Alright, there's a lot to dig into here. Buckle up!
 
 #### File.Writer, Io.Writer and Buffered IO
 
@@ -375,14 +395,14 @@ an interface similar to `Allocator` while the first is an implementation of that
 `File.Writer` contains a field called `interface` which is an `Io.Writer`, a pointer to which
 can be passed to functions which write.
 
-Creating a writer in Zig also means creating a buffer. The purpose of this buffer is to store output
+Creating a writer also means creating a buffer. The purpose of this buffer is to store output
 temporarily before it get's passed to the writer's underlying implementation. This is faster than
-writing output piecemeal as it reduces the number of calls to the implementation. Buffered IO is
-a common technique used in almost every language but is usually hidden behind the scenes. I've
-chosen to create a 1KiB buffer and have left it uninitialized with `undefined `.
+writing output piecemeal as it reduces the number of calls to the implementation. Buffered IO is a
+common technique used in almost every language but is usually hidden behind the scenes. I've chosen
+to create a 1KiB buffer and have left it uninitialized with `undefined `.
 
 The buffer is stored in the `Io.Writer` interface rather than the implementation which is why it
-is passed as a pointer, since the interface stores state like how full the buffer is.
+is passed as a pointer, since the interface stores mutable state to track how full the buffer is.
 
 A call to `flush` is required at the end to write out any left over data in the buffer.
 
@@ -425,7 +445,7 @@ const Chunk = struct {
 
     pub const empty = Chunk{
         .code = .empty,
-        .constants = .empty // new line!
+        .constants = .empty, // new line!
     };
     
 ```
@@ -546,14 +566,14 @@ the corresponding byte in `code`. We'll need to add this field to `Chunk`.
 ```zig
 const Chunk = struct {
     code: std.ArrayList(u8),
-    lines: std.ArrayList(u32), // new line
+    lines: std.ArrayList(u32), // new line!
     constants: std.ArrayList(Value),
 
     // ...
 
     pub const empty = Chunk{
         .code = .empty,
-        .lines = .empty, // new line
+        .lines = .empty, // new line!
         .constants = .empty,
     };
 
@@ -561,7 +581,7 @@ const Chunk = struct {
 
     pub fn deinit(chunk: *Chunk, gpa: Allocator) void {
         chunk.code.deinit(gpa);
-        chunk.lines.deinit(gpa); // new line
+        chunk.lines.deinit(gpa); // new line!
         chunk.constants.deinit(gpa);
     }
 
@@ -575,7 +595,7 @@ We'll require a line number to be passed whenever a byte is written to the chunk
  ```zig
     pub fn append(chunk: *Chunk, gpa: Allocator, byte: u8, line: u32) Allocator.Error!void {
         try chunk.code.append(gpa, byte);
-        try chunk.lines.append(gpa, line); // new line (and parameter)
+        try chunk.lines.append(gpa, line); // new line (and parameter)!
     }
 ```
 
@@ -657,24 +677,23 @@ and declarations at the top level and import it to use within `main`. Create a n
 ```zig
 // file: src/Chunk.zig
 
-const Chunk = @This();
+const Chunk = @This(); // new!
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const values = @import("values.zig"); // new!
 const Value = values.Value; // new!
 
-    code: std.ArrayList(u8),
-    lines: std.ArrayList(u32),
-    constants: std.ArrayList(Value),
+code: std.ArrayList(u8),
+lines: std.ArrayList(u32),
+constants: std.ArrayList(Value),
 
-    pub const OpCode = enum(u8) {
-        constant,
-        @"return",
-    };
+pub const OpCode = enum(u8) {
+    constant,
+    @"return",
+};
 
-    // <other declarations>
-}
+// <other declarations>
 ```
 
 The necessary imports also have to be copied over, including a new import of `Value`. There's also
@@ -692,7 +711,7 @@ Create this file and copy the two functions along with their required imports.
 
 const std = @import("std");
 const Io = std.Io;
-const Chunk = @import("Chunk.zig")
+const Chunk = @import("Chunk.zig");
 
 // Remember to make these public with `pub`!
 pub fn disassembleChunk(...) {
@@ -713,9 +732,9 @@ function.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
-const Chunk = @import("Chunk.zig");
-const debug = @import("debug.zig");
-const disassembleChunk = debug.disassembleChunk;
+const Chunk = @import("Chunk.zig"); // new line!
+const debug = @import("debug.zig"); // new line!
+const disassembleChunk = debug.disassembleChunk; // new line!
 
 pub fn main() !void {
     // ...

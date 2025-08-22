@@ -108,14 +108,14 @@ ip as an index into `chunk.code.items`.
 // VM.zig
 
 gpa: Allocator,
-chunk: *const Chunk, // new line!
-ip: usize,
+chunk: *const Chunk,
+ip: usize, // new line!
 
 pub fn init(gpa: Allocator, chunk: *const Chunk) VM {
     return .{
         .gpa = gpa,
-        .chunk = chunk, // new line!
-        .ip = 0,
+        .chunk = chunk,
+        .ip = 0, // new line!
     };
 }
 ```
@@ -128,7 +128,7 @@ pub fn run(vm: *VM) RunError!void {
 
     // new code:
     while (true) {
-        const instruction: Chunk.OpCode = @enumFromInt(vm.nextByte());
+        const instruction: Chunk.OpCode = @enumFromInt(vm.readByte());
 
         switch (instruction) {
             .@"return" => return,
@@ -211,7 +211,7 @@ pub const RunError = Allocator.Error || Io.Writer.Error || error{RuntimeError};
 //                                      ^^^^^^^^^^^^^^^ -- add this!
 ```
 
-Since writing is now another possible cause of failure, we need to add to `RunError`.
+Since writing is now another possible cause of failure, we need to add it's error set to `RunError`.
 
 Of course, this means giving it something to write to. We can reuse the same stdout writer we
 created for disassembling chunks in `main`.
@@ -219,7 +219,7 @@ created for disassembling chunks in `main`.
 ```zig
 // main.zig
 
-    // in main(), add 1 argument:
+    // in main(), change this line to add `writer`:
 
     try interpret(gpa, writer, &chunk);
 }
@@ -233,9 +233,9 @@ fn interpret(gpa: Allocator, output: *Io.Writer, chunk: *const Chunk) VM.RunErro
     // ...
 ```
 
-We can't forget to flush the writer's buffer once we're finished, otherwise whatever output has
-been built up will never be displayed. We only want to flush once when the program is finished, so
-let's do it at the end of `interpret`.
+We can't forget to flush the writer's buffer once we're done, otherwise whatever output has been
+built up will never be displayed. We only want to flush once when the program is finished, so let's
+do it at the end of `interpret`.
 
 ```zig
 // main.zig
@@ -248,6 +248,8 @@ let's do it at the end of `interpret`.
 }
 ```
 
+You can also remove the call to `flush` inside `main` which we added just after disassembling the
+chunk.
 
 Ok, Let's see our VM in action!
 
@@ -270,9 +272,12 @@ tracing on and off.
 
 ```zig
 // VM.zig
-// add after `deinit`:
 
-const debug_trace = true;
+const debug_trace = true; // new line!
+
+pub const RunError = Allocator.Error || Io.Writer.Error || error{RuntimeError};
+
+pub fn run(vm: *VM) RunError!void {
 ```
 
 Now, before each instruction is executed, we'll disassemble it on the fly.
@@ -680,17 +685,19 @@ Now we can put together a more complex calculation in `main`.
     try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant), 123);
     try chunk.append(gpa, constant, 123);
 
-    constant = try chunk.addConstant(gpa, 3.4); // new line!
-    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant), 123); // new line!
-    try chunk.append(gpa, constant, 123); // new line!
+    // new code starts
+    constant = try chunk.addConstant(gpa, 3.4);
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant), 123);
+    try chunk.append(gpa, constant, 123);
 
-    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.add), 123); // new line!
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.add), 123);
 
-    constant = try chunk.addConstant(gpa, 5.6); // new line!
-    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant), 123); // new line!
-    try chunk.append(gpa, constant, 123); // new line!
+    constant = try chunk.addConstant(gpa, 5.6);
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.constant), 123);
+    try chunk.append(gpa, constant, 123);
 
-    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.divide), 123); // new line!
+    try chunk.append(gpa, @intFromEnum(Chunk.OpCode.divide), 123);
+    // new code ends
     try chunk.append(gpa, @intFromEnum(Chunk.OpCode.negate), 123);
 
     try chunk.append(gpa, @intFromEnum(Chunk.OpCode.@"return"), 123);

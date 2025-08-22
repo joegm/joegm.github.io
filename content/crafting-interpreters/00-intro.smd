@@ -36,8 +36,9 @@ concepts in Zig, and how it differs from the original C code.
 
 ## Prerequisites
 
-I'll assume you know how to code, but are new to programming with a non memory-managed language like
-C or Zig. You should at least know what a pointer is.
+I'll assume you know how to code, but are a beginner when it comes to programming with a non
+memory-managed language like C or Zig. You should know basic concepts like what a pointer or a
+struct is, or at least be prepared to find out by yourself in the process.
 
 I strongly recommend reading at least the [Welcome](https://craftinginterpreters.com/welcome.html)
 section of the book to give yourself an idea of what you're getting into, and the toy scripting
