@@ -3,5 +3,7 @@
 </head>
 <div id="content">
   <div class="date" :text="$page.date.format('Jan 2, 2006')"></div>
+  <div id="table-of-contents"><h2><a class="" href="#table-of-contents">Table of Contents</a></h2></div>
+  <div :html="$page.toc()"></div>
   <ctx :html="$page.content()"></ctx>
 </div>

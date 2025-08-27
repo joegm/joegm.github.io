@@ -1,0 +1,479 @@
+---
+.title = "Inside Zig's New Writer",
+.description = "The implementation and reasons behind this complicated new interface",
+.date = @date("2025-08-27"),
+.author = "Joe Mckay",
+.layout = "post.shtml",
+---
+
+Zig version [0.15.1](https://ziglang.org/download/0.15.1/release-notes.html) recently released,
+bringing with it some breaking standard library changes which have been making waves in the Zig
+world.
+
+This event has been dubbed
+[Writergate](https://ziglang.org/download/0.15.1/release-notes.html#Writergate) by the Zig community 
+because it centers around a breaking overhaul of the standard library's `Reader` and `Writer`
+interfaces. The new version is pretty sophisticated and claims various improvements, especially
+around performance and optimizer-friendliness.
+
+I'll do my best to explain the new `Writer` interface specifically, diving under the hood to show
+how it works and the ways in which it's better than other interface implementations.
+
+But first, let's step back and look at how a writer interface was used in Zig's pre-Writergate era.
+
+## [A Tale of Three Writers]($section.id('a-tale-of-three-writers'))
+
+Before `0.15.1`, there were 3 main ways to accept a writer in your function, all of these had
+their upsides, but none were perfect. If you're not interested, you can you can just
+[skip ahead](#one-writer-to-rule-them-all) to where I talk about the new one.
+
+This section is written in the context of Zig `0.14.1` and won't work on newer versions.
+
+### [GenericWriter]($section.id('GenericWriter'))
+
+The Generic Writer, which was located at `std.io.GenericWriter` and commonly aliased as
+`std.io.Writer` is, as the name suggests, a generic type. It takes 3 compile-time parameters to
+create a new type:
+
+- A `Context` type which is used as the first parameter to `write`.
+- An `Error` type which contains all the errors which can be caused by writing.
+- A `write` function with takes a `Context` along with some bytes to write and returns either an
+  `Error` or the number of bytes written.
+
+Let's look at how `std.fs.File` implements this:
+
+```zig
+// std.fs.File
+
+/// The OS-specific file descriptor or file handle.
+handle: Handle,
+
+pub const WriteError = posix.WriteError;
+
+pub fn write(self: File, bytes: []const u8) WriteError!usize {
+    if (is_windows) {
+        return windows.WriteFile(self.handle, bytes, null);
+    }
+
+    return posix.write(self.handle, bytes);
+}
+
+pub const Writer = io.Writer(File, WriteError, write); // The GenericWriter!
+
+pub fn writer(file: File) Writer {
+    return .{ .context = file };
+}
+```
+
+A `File` has one field, which is it's handle, it has a `write` function which takes a `File` and can
+return a `WriteError`. This is all that's needed to create a generic writer, using `io.Writer(File,
+WriteError, write)` and a convenience function to turn a `File` into a `File.Writer`.
+
+Here's how this API is used:
+
+```zig
+const std = @import("std");
+
+pub fn main() !void {
+    const stdout_file = std.io.getStdOut();
+
+    const stdout_writer = stdout_file.writer();
+
+    try writeData(stdout_writer);
+}
+
+fn writeData(writer: std.fs.File.Writer) std.fs.File.Writer.Error!void {
+    try writer.writeAll("Hello, GenericWriter!\n");
+}
+```
+
+
+`GenericWriter` uses the core `write` function to provide other handy writing functions like
+`writeAll`, `print` `writeStruct`, etc. Any function which wants to write to a file can take
+a `File.Writer` as a parameter and be good to go.
+
+Here comes the twist though: `GenericWriter` by itself is *not an interface*,. A function which
+accepts a `File.Writer` can't be given a `std.net.Stream.Writer` because even though both types were
+created with `GenericWriter`, they are not the same. What's missing is a means of *dispatching*.
+
+#### [The Need for Dispatch]($section.id('the-need-for-dispatch'))
+
+What `GenericWriter` lacks is a way to *dispatch* a single interface to many different possible
+writer implementations. Dispatching techniques are separated into two categories: *dynamic* dispatch
+which is performed at runtime, and *static* dispatch which is performed at compile-time by the
+compiler.
+
+Let's first inspect the old dynamically-dispatched writer interface, called `AnyWriter`.
+
+### [AnyWriter]($section.id('AnyWriter'))
+
+`std.io.AnyWriter` was the dynamically-dispatched writer in `0.14.1`. The key difference from
+`GenericWriter` is that `AnyWriter` is not generic. It's a single, concrete type and a function
+which uses it can be used with, well, *any* implementation of it.
+
+An `AnyWriter` has two fields:
+
+```zig
+context: *const anyopaque,
+writeFn: *const fn (context: *const anyopaque, bytes: []const u8) anyerror!usize,
+```
+
+`context` is a type-erased pointer to whatever data the implementation needs to perform a write.
+The `writeFn` points to a function which performs a write with this `context` data and can return
+`anyerror`, literally any possible error value.
+
+`AnyWriter` doesn't care about the type of the context or the error returned by `write`, which
+allows it to be used with different implementation types. `GenericWriter` has a function to turn
+itself into an `AnyWriter` like so:
+
+```zig
+ pub inline fn any(self: *const Self) AnyWriter {
+    return .{
+        .context = @ptrCast(&self.context),
+        .writeFn = typeErasedWriteFn,
+    };
+}
+
+fn typeErasedWriteFn(context: *const anyopaque, bytes: []const u8) anyerror!usize {
+    const ptr: *const Context = @ptrCast(@alignCast(context));
+    return writeFn(ptr.*, bytes);
+}
+```
+
+Here's a visualization of the relationships between a `File`, `File.Writer` and an `AnyWriter`.
+
+[Pointer relationships when using a File.Writer via AnyWriter]($image.asset('AnyWriter-Diagram.svg').size(800,0))
+
+The `File` and `AnyWriter` are both runtime objects and `AnyWriter` uses the `write` function
+provided by `File.Writer`.
+
+We can use the interface like so:
+
+```zig
+const std = @import("std");
+
+pub fn main() !void {
+    const stdout_file = std.io.getStdOut();
+
+    const stdout_writer = stdout_file.writer();
+
+    try writeData(stdout_writer.any());
+}
+
+fn writeData(writer: std.io.AnyWriter) anyerror!void {
+    try writer.writeAll("Hello, GenericWriter!\n");
+}
+```
+
+Runtime dispatch has a couple of drawbacks, though. 
+
+1. It requires doing extra work at runtime by storing `context` and `writeFn` as pointers. Each
+   write must follow these pointers requiring extra memory loads.
+2. It reduces type safety by returning `anyerror` rather than a fixed error set which would allow
+   errors to be handled exhaustively.
+
+With that in mind, let's see how compile-time dispatch is done.
+
+### [anytype]($section.id('anytype'))
+
+Zig's [`anytype`](https://ziglang.org/documentation/0.15.1/#Function-Parameter-Type-Inference)
+keyword can be used in place of a parameter type in a function signature to allow an argument of
+any type to be passed. Every instance where the function with a different type of the argument, the
+compiler secretly generates a concrete function which uses that type.
+
+This is the essence of compile-time dispatch: we can write code that will work with different types,
+and the compiler generates different code for each type that is used. `anytype` is used for many
+purposes beyond just interfaces, and still exists in `0.15.1`.
+
+Changing our existing example to use `anytype` looks like this:
+
+```zig
+const std = @import("std");
+
+pub fn main() !void {
+    const stdout_file = std.io.getStdOut();
+
+    const stdout_writer = stdout_file.writer();
+
+    try writeData(stdout_writer);
+}
+
+fn writeData(writer: anytype) @TypeOf(writer).Error!void {
+    try writer.writeAll("Hello, GenericWriter!\n");
+}
+```
+
+Any value of a writer type generated by `GenericWriter`, or even an `AnyWriter` could be passed as
+the argument. Note that trying to pass a value for whose type didn't have an `Error` declaration or
+a `write` function would result in a compile error.
+
+Generating code for each writer type being used eliminates the runtime overhead and type safety
+problems which `AnyWriter` exhibits. Instead, compile-time dispatch has a couple of it's own
+drawbacks.
+
+1. Generating a separate function for each type can bloat the size of the produced executable.
+2. It is not obvious from the function signature what types can be used for the `anytype` argument,
+   usually a comment is required to make it clear.
+
+The ambiguity and genericness of `anytype` made it tempting for APIs to just accept a single
+concrete variant of `GenericWriter`, such as `std.http` which up until now used `std.net.Stream`
+(a `GenericWriter` implementation for network sockets) and could not be used with other kinds of
+writers.
+
+Since `anytype` also allows `AnyWriter` to be used with it, it was the primary method of accepting
+a writer interface in Zig's standard library before this release.
+
+## [One Writer to Rule Them All]($section.id('one-writer-to-rule-them-all'))
+
+The new replacement for all the above methods is `0.15.1`'s `std.Io.Writer`. It uses a different
+method of dynamic dispatch from `AnyWriter`, performs buffering *in the interface* and has quite
+a few extra features and quirks which make it more complicated but also more powerful than the
+previous interfaces.
+
+A condensed list of the motivations behind the new interface can be found in the
+[release notes](https://ziglang.org/download/0.15.1/release-notes.html#Motivation), which links
+[a talk](https://www.youtube.com/watch?v=f30PceqQWko) by Zig creator Andrew Kelley which you should
+definitely watch as well.
+
+Let's peek under the hood to see how this interface is written (comments omitted).
+
+```zig
+vtable: *const VTable,
+buffer: []u8,
+end: usize = 0,
+
+pub const VTable = struct {
+    drain: *const fn (w: *Writer, data: []const []const u8, splat: usize) Error!usize,
+    sendFile: *const fn (w: *Writer, file_reader: *File.Reader, limit: Limit) FileError!usize = unimplementedSendFile,
+    flush: *const fn (w: *Writer) Error!void = defaultFlush,
+    rebase: *const fn (w: *Writer, preserve: usize, capacity: usize) Error!void = defaultRebase,
+}
+```
+
+
+Wow. There's a lot to pick apart here. I'll explain the `buffer`/`end` fields in a moment, but let's
+start with `vtable`, and how the dynamic dispatch technique in the new writer differs from that in
+the old `std.io.AnyWriter`.
+
+### [Virtual Tables and @fieldParentPtr]($section.id('virtual-tables-and-fieldparentptr'))
+
+Any dynamically dispatched interface needs two things: A way to access the implementation's state,
+and a set of function pointers which operate on that state to accomplish the interface's task. This
+set of function pointers is referred to collectively as a *virtual table*, or "vtable". `AnyWriter`
+only had one function pointer which it stored directly. `Io.Writer` has a much bigger interface
+so stores a pointer to a vtable with 4 function pointers.
+
+In `AnyWriter`, a type-erased pointer to the implemenation object is stored in the interface. In the
+new `Io.Writer` The interface is a field of the implementation object, and a pointer to that field
+is passed to functions. The implementation's state is accessed in the vtable functions by using a
+Zig builtin called `@fieldParentPtr`, which subtracts the field's offset inside the struct from the
+pointer to the field.
+
+Here's a diagram to help you understand what this all means:
+
+[A Diagram of Pointer Relationships with File.Writer]($image.asset('Io-Writer-Diagram.svg').size(800,0))
+
+Take a look at the `File.Writer` implementation and notice how the interface is stored as a field.
+An interface function such as `drain` takes a pointer to this field and uses `@fieldParentPtr` to
+get a pointer to the `File.Writer`.
+
+```zig
+// std.fs.File
+
+pub const Writer = struct {
+    file: File,
+    // ...
+    interface: std.Io.Writer,
+
+    // ...
+
+    pub fn drain(io_w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const w: *Writer = @alignCast(@fieldParentPtr("interface", io_w));
+        const handle = w.file.handle;
+```
+
+The interface is constructed with a pointer to a statically-allocated vtable containing the
+implemented functions.
+
+```zig
+    pub fn initInterface(buffer: []u8) std.Io.Writer {
+        return .{
+            .vtable = &.{
+                .drain = drain,
+                .sendFile = switch (builtin.zig_backend) {
+                    else => sendFile,
+                    .stage2_aarch64 => std.Io.Writer.unimplementedSendFile,
+                },
+            },
+            .buffer = buffer,
+        };
+    }
+```
+
+Now it's time to talk about the main feature of the new API, which is how it handles *buffering*.
+
+### [Buffering in the Interface]($section.id('buffering-in-the-interface'))
+
+Buffering is a widespread optimization for performing IO. It involves storing data in an
+intermediate memory buffer and only transferring the data when this buffer becomes full, reducing
+the total number of data transfers needed. This improves performance as transferring the data is
+usually slow, for example a single `write` syscall for file output is 3 orders of magnitude slower
+than a memory write to a buffer.
+
+The `drain` function we've been seeing is how the implementation actually writes the buffered data.
+After the user is finished with the writer, they call `flush` to write out any leftover data still
+in the buffer.
+
+[Diagram displaying how Io.Writer buffers data]($image.asset('Buffering-Interface.svg').size(800,0))
+
+In most languages, buffering is an implementation detail done behind the scenes. Zig pre-writergate
+had `std.io.BufferedWriter` which provided a `GenericWriter` for exactly this purpose. Here's how
+that was used:
+
+```zig
+const std = @import("std");
+
+pub fn main() !void {
+    const stdout_file = std.io.getStdOut();
+
+    const stdout_writer = stdout_file.writer();
+    var buffered_writer = std.io.bufferedWriter(stdout_writer);
+
+    try writeData(buffered_writer.writer());
+    try buffered_writer.flush();
+}
+
+fn writeData(writer: anytype) @TypeOf(writer).Error!void {
+    try writer.writeAll("Hello, 0.14.1!\n");
+}
+```
+
+Now, buffering is part of the interface itself! The `buffer` and `end` fields in the `Writer`
+interface object store the buffer and the amount of data currently buffered, respectively.
+
+This is a bold decision because moving more logic into the interface makes it less flexible. No
+other comparable language does buffering in the interface, but doing so actually has upsides when it
+comes to performance. Here's how that previous example would be written with the new API:
+
+```zig
+const std = @import("std");
+
+pub fn main() !void {
+    const stdout_file = std.fs.File.stdout();
+
+    var buffer: [1024]u8 = undefined;
+    var stdout_writer = stdout_file.writer(&buffer);
+
+    try writeData(&stdout_writer.interface);
+    try stdout_writer.interface.flush(); // this could also be done in `writeData`
+}
+
+fn writeData(writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    try writer.writeAll("Hello, 0.15.1!\n");
+}
+```
+
+So why is this any better? The answer lies in understanding the performance of indirect function
+calls.
+
+#### [Indirect and Virtual Calls]($section.id('indirect-and-virtual-calls'))
+
+Every dynamically-dispatched interface, no matter the language, involves using function pointers
+(`*const fn`) to call to the implementation. Calling a function via pointer like this is called an
+*indirect call*, sometimes called a *virtual call* if the function pointer happens to be part of
+a vtable.
+
+Indirect calls are generally slower than direct calls to a known function for a few reasons. An
+indirect call means loading the address of the function before you call it whereas a direct call
+can jump to a static address. Indirect calls are also harder to optimize. If the compiler can't
+determine which function the call will go to, it can't inline the function or perform other useful
+optimizations with the context of the callsite.
+
+If we want the best performance, we want to avoid indirect calls as much as possible, which means
+calling `drain` as few times as possible. Buffering in the interface achieves this as most writes
+can be performed by just storing it in the buffer without going through the vtable.
+
+### [The `drain` Function and Vectored IO]($section.id('the-drain-function-and-vectored-io'))
+
+The `drain` function is the core function of the interface as it's responsible for actually
+performing the write. It starts by "draining" bytes from the buffer and writing them before writing
+the data it's passed. It's the only function which *must* be provided by the implementer.
+
+```zig
+    drain: *const fn (w: *Writer, data: []const []const u8, splat: usize) Error!usize,
+```
+
+This is a lot weirder than the standard `write` function like the one `GenericWriter` used. Why is
+`data` a slice of slices rather than a single slice, and what's the point of `splat`?
+
+The first question can be answered with [*Vectored IO*](https://en.wikipedia.org/wiki/Vectored_I/O).
+Vectored IO is when data from multiple memory regions can be written in a single call. The `data`
+parameter is called the "vector" and each slice of data in the vector is written sequentially by
+`drain`. This can be more efficient as it reduces the overhead of making multiple virtual calls for
+writing different pieces of data. `data` must contain at least one slice.
+
+The `splat` value is the number of times the last slice of `data` will be written. This is useful
+for writing a large amount of repeated data without actually allocating or copying any memory. This
+is also referred to as a "logical memset".
+
+It's important to realize that `drain` can write as many bytes as it wants. It may write all the
+bytes, it may write all the bytes in the buffer but none from `data`, it may only drain some of the
+buffer. It returns how many bytes it wrote, excluding buffered bytes and it may need to be called
+multiple times to make sure everything gets written.
+
+### [`sendFile`]($section.id('sendFile'))
+
+This is another case of moving more logic to the interface for performance. Providing `sendFile`
+is entirely optional for `Io.Writer` and is used for directly writing the contents of a file.
+
+```zig
+    sendFile: *const fn (
+        w: *Writer,
+        file_reader: *File.Reader,
+        limit: Limit,
+    ) FileError!usize = unimplementedSendFile,
+```
+
+The source file is passed as a `*File.Reader`, `File.Writer`'s counterpart, and the `limit` argument
+limits how much data should be read from the file.
+
+Certain operating systems have syscalls to copy data from file to file without incurring the
+overhead of transferring the data to and from userspace. If this is not supported, the `sendFile`
+implementation can return `error.Unimplemented` and the user can default to manually reading and
+writing. `unimplementedSendFile` does just that.
+
+### [`flush` and `rebase`]($section.id('flush-and-rebase'))
+
+When a write is complete, the user should call `flush` to write out whatever data is left in the
+buffer. A default implementation is provided as `defaultFlush` which just calls `drain` repeatedly
+until the buffer is empty which is usually the desired approach, but the implementation can provide
+it's own function for custom behaviour.
+
+```zig
+    flush: *const fn (w: *Writer) Error!void = defaultFlush,
+```
+
+`rebase` is used to ensure that a certain amount of data can be buffered, similar to
+`ensureCapacity` on an arraylist, for instance.
+
+```zig
+    rebase: *const fn (w: *Writer, preserve: usize, capacity: usize) Error!void = defaultRebase,
+```
+
+We can also specify how many of the most recent bytes should remain buffered with `preserve`.
+
+The default `rebase` works by repeatedly calling `drain` to write out bytes before the preserved
+region and then copying the preserved bytes backwards to stay contiguous. Here's a small-scale
+example of what that might look like:
+
+[`rebase` working on a small buffer]($image.asset('Rebase-Diagram.svg').size(0,400))
+
+## [Conclusion]($section.id('conclusion'))
+
+This post is already too long so I'll stop here, but hopefully you have a decent mental model of
+what's happening under the hood when using the new writer interface. There's still a lot more to
+learn about `std.Io.Writer` (not to mention it's `Reader` counterpart) but the only way to get
+comfortable with it is by *using it* in your own code.
+
+The new interface is more complicated and more difficult to learn than before, but mastering it
+should help you write more performant IO code.
